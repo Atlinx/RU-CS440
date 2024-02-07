@@ -1,8 +1,12 @@
+use rand::{thread_rng, Rng};
 use std::fmt::Display;
 
 fn main() {
-    println!("Hello, world!");
-    println!("printing a vec: {}", Vec2::new(5, 10))
+    let map_gen = MazeGenerator::new(Vec2::new(10, 10));
+    let mut rand_map = map_gen.generate_random(0.5);
+    println!("0.5 Density Map: \n{}", rand_map);
+    rand_map = map_gen.generate_random(0.7);
+    println!("0.7 Density Map: \n{}", rand_map);
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -63,22 +67,50 @@ impl Maze {
             Err(MazeError::OutOfBounds)
         }
     }
-    fn state_string(&self) -> String {
-        let mut str = String::new();
+}
+impl Display for Maze {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Maze({}, {}):\n", self.size.x, self.size.y)?;
+        write!(f, ".{}.", "-".repeat(self.size.x as usize))?;
         for y in 0..self.size.y {
+            write!(f, "|")?;
             for x in 0..self.size.x {
                 if self.cells[(self.size.x * y + x) as usize] {
-                    str += " "
+                    write!(f, "X")?;
                 } else {
-                    str += "X"
+                    write!(f, " ")?;
                 }
             }
-            str += "\n"
+            write!(f, "|\n")?;
         }
-        str
+        write!(f, "'{}'\n", "-".repeat(self.size.x as usize))?;
+        Ok(())
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum MazeError {
     OutOfBounds,
+}
+
+struct MazeGenerator {
+    pub size: Vec2,
+}
+
+impl MazeGenerator {
+    pub fn new(size: Vec2) -> MazeGenerator {
+        MazeGenerator { size }
+    }
+    pub fn generate_random(&self, density: f32) -> Maze {
+        let mut rng = rand::thread_rng();
+        let mut maze = Maze::new(self.size);
+        for y in 0..self.size.y {
+            for x in 0..self.size.x {
+                maze.set_cell(Vec2::new(x, y), rng.gen_bool(density.into()))
+                    .unwrap();
+            }
+        }
+        maze
+    }
+    // pub fn generate_dfs_map(&self) -> Maze {}
 }

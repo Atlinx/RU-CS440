@@ -1,9 +1,10 @@
 #![allow(dead_code)]
-use rand::Rng;
+use colored::Colorize;
+use rand::{seq::SliceRandom, thread_rng, Rng};
 use std::{collections::HashSet, fmt::Display, ops};
 
 fn main() {
-    let map_gen = MazeGenerator::new(Vec2i::new(50, 50));
+    let map_gen = MazeGenerator::new(Vec2i::new(51, 51));
     let mut rand_map = map_gen.generate_random(0.5);
     println!("0.5 Density Map: \n{}", rand_map);
     rand_map = map_gen.generate_random(0.7);
@@ -24,13 +25,6 @@ impl Vec2i {
     pub const LEFT: Vec2i = Vec2i { x: -1, y: 0 };
     pub const RIGHT: Vec2i = Vec2i { x: 1, y: 0 };
     pub const DIRECTIONS_4_WAY: [Vec2i; 4] = [Vec2i::UP, Vec2i::DOWN, Vec2i::LEFT, Vec2i::RIGHT];
-
-    pub const UP_2: Vec2i = Vec2i { x: 0, y: 2 };
-    pub const DOWN_2: Vec2i = Vec2i { x: 0, y: -2 };
-    pub const LEFT_2: Vec2i = Vec2i { x: -2, y: 0 };
-    pub const RIGHT_2: Vec2i = Vec2i { x: 2, y: 0 };
-    pub const DIRECTIONS_4_WAY_2: [Vec2i; 4] =
-        [Vec2i::UP_2, Vec2i::DOWN_2, Vec2i::LEFT_2, Vec2i::RIGHT_2];
 
     pub fn new(x: i32, y: i32) -> Vec2i {
         Vec2i { x, y }
@@ -120,19 +114,19 @@ impl Maze {
 impl Display for Maze {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Maze({}, {}):\n", self.size.x, self.size.y)?;
-        write!(f, ".{}.\n", "-".repeat(self.size.x as usize))?;
+        write!(f, "XX{}XX\n", "XX".repeat(self.size.x as usize))?;
         for y in 0..self.size.y {
-            write!(f, "|")?;
+            write!(f, "XX")?;
             for x in 0..self.size.x {
                 if self.cells[(self.size.x * y + x) as usize] {
-                    write!(f, "X")?;
+                    write!(f, "{}", "XX")?;
                 } else {
-                    write!(f, " ")?;
+                    write!(f, "  ")?;
                 }
             }
-            write!(f, "|\n")?;
+            write!(f, "XX\n")?;
         }
-        write!(f, "'{}'\n", "-".repeat(self.size.x as usize))?;
+        write!(f, "XX{}XX\n", "XX".repeat(self.size.x as usize))?;
         Ok(())
     }
 }
@@ -172,25 +166,30 @@ impl MazeGenerator {
         let mut maze = Maze::new(self.size);
         maze.fill(true);
         let mut visited_slots = HashSet::<Vec2i>::new();
-        let mut current_slots_stack = vec![start_pos];
+        let mut current_slots_stack: Vec<(Vec2i, Option<Vec2i>)> = vec![(start_pos, None)];
         // Open up each slot
-        while let Some(current_slot) = current_slots_stack.pop() {
+        while let Some((current_slot, prev_slot)) = current_slots_stack.pop() {
+            if visited_slots.contains(&current_slot) {
+                continue;
+            }
+
             visited_slots.insert(current_slot);
             // Open up every slot we visit
             maze.set_cell(current_slot, false).unwrap();
-            let neighbors = self.get_slot_neighbors_unvisited(current_slot, &visited_slots);
-            if neighbors.len() > 0 {
-                let rand_neighbor_index = rng.gen_range(0..neighbors.len());
-                let rand_neighbor = neighbors[rand_neighbor_index];
-                // Open up the wall between current_cell and the neighbor
-                let mid_cell = (current_slot + rand_neighbor) / 2;
+
+            // Open up the wall between current_cell and the neighbor
+            if let Some(prev_slot) = prev_slot {
+                let mid_cell = (current_slot + prev_slot) / 2;
                 maze.set_cell(mid_cell, false).unwrap();
-                for neighbor_index in 0..neighbors.len() {
-                    if rand_neighbor_index != neighbor_index {
-                        current_slots_stack.push(neighbors[neighbor_index]);
-                    }
+            }
+
+            // Add neighbors to stack
+            let mut neighbors = self.get_slot_neighbors(current_slot);
+            if neighbors.len() > 0 {
+                neighbors.shuffle(&mut rng);
+                for neighbor in neighbors {
+                    current_slots_stack.push((neighbor, Some(current_slot)));
                 }
-                current_slots_stack.push(rand_neighbor);
             }
         }
         maze
@@ -198,11 +197,14 @@ impl MazeGenerator {
     fn is_in_bounds(&self, pos: Vec2i) -> bool {
         pos.x >= 0 && pos.y >= 0 && pos.x < self.size.x && pos.y < self.size.y
     }
-    fn get_slot_neighbors_unvisited(&self, pos: Vec2i, visited: &HashSet<Vec2i>) -> Vec<Vec2i> {
+    fn get_slot_neighbors(&self, pos: Vec2i) -> Vec<Vec2i> {
+        self.get_cell_neighbors(pos, 2)
+    }
+    fn get_cell_neighbors(&self, pos: Vec2i, step: i32) -> Vec<Vec2i> {
         let mut neighbors = Vec::new();
-        for dir in Vec2i::DIRECTIONS_4_WAY_2 {
-            let neighbor = pos + dir;
-            if self.is_in_bounds(neighbor) && !visited.contains(&neighbor) {
+        for dir in Vec2i::DIRECTIONS_4_WAY {
+            let neighbor = pos + dir * step;
+            if self.is_in_bounds(neighbor) {
                 neighbors.push(neighbor)
             }
         }

@@ -1,4 +1,5 @@
-use rand::{thread_rng, Rng};
+#![allow(dead_code)]
+use rand::Rng;
 use std::{collections::HashSet, fmt::Display, ops};
 
 fn main() {
@@ -184,12 +185,12 @@ impl MazeGenerator {
                 // Open up the wall between current_cell and the neighbor
                 let mid_cell = (current_slot + rand_neighbor) / 2;
                 maze.set_cell(mid_cell, false).unwrap();
-                current_slots_stack.push(rand_neighbor);
                 for neighbor_index in 0..neighbors.len() {
                     if rand_neighbor_index != neighbor_index {
                         current_slots_stack.push(neighbors[neighbor_index]);
                     }
                 }
+                current_slots_stack.push(rand_neighbor);
             }
         }
         maze

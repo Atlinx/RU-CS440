@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use colored::Colorize;
 use rand::{seq::SliceRandom, thread_rng, Rng};
-use std::{collections::HashSet, fmt::Display, ops};
+use std::{borrow::BorrowMut, collections::HashSet, fmt::Display, ops};
 
 fn main() {
     let map_gen = MazeGenerator::new(Vec2i::new(51, 51));
@@ -13,8 +13,9 @@ fn main() {
     println!("Rand DFS Map: \n{}", rand_map);
 }
 
+// region Utils
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-struct Vec2i {
+pub struct Vec2i {
     pub x: i32,
     pub y: i32,
 }
@@ -66,16 +67,18 @@ impl Display for Vec2i {
         write!(f, "Vec2({}, {})", self.x, self.y)
     }
 }
+// endregion
 
+// region Map
 #[derive(Debug)]
-struct Maze {
+pub struct Map {
     cells: Vec<bool>,
     size: Vec2i,
 }
 
-impl Maze {
-    fn new(size: Vec2i) -> Maze {
-        Maze {
+impl Map {
+    fn new(size: Vec2i) -> Map {
+        Map {
             cells: vec![false; (size.x * size.y) as usize],
             size,
         }
@@ -111,7 +114,7 @@ impl Maze {
         self.cells.fill(value);
     }
 }
-impl Display for Maze {
+impl Display for Map {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Maze({}, {}):\n", self.size.x, self.size.y)?;
         write!(f, "XX{}XX\n", "XX".repeat(self.size.x as usize))?;
@@ -135,8 +138,10 @@ impl Display for Maze {
 enum MazeError {
     OutOfBounds,
 }
+// endregion
 
-struct MazeGenerator {
+// region MazeGenerator
+pub struct MazeGenerator {
     pub size: Vec2i,
 }
 
@@ -144,9 +149,9 @@ impl MazeGenerator {
     pub fn new(size: Vec2i) -> MazeGenerator {
         MazeGenerator { size }
     }
-    pub fn generate_random(&self, density: f32) -> Maze {
+    pub fn generate_random(&self, density: f32) -> Map {
         let mut rng = rand::thread_rng();
-        let mut maze = Maze::new(self.size);
+        let mut maze = Map::new(self.size);
         for y in 0..self.size.y {
             for x in 0..self.size.x {
                 maze.set_cell(Vec2i::new(x, y), rng.gen_bool(density.into()))
@@ -155,15 +160,15 @@ impl MazeGenerator {
         }
         maze
     }
-    pub fn generate_dfs_map_default(&self) -> Maze {
+    pub fn generate_dfs_map_default(&self) -> Map {
         self.generate_dfs_map(Vec2i::ZERO)
     }
-    pub fn generate_dfs_map(&self, start_pos: Vec2i) -> Maze {
+    pub fn generate_dfs_map(&self, start_pos: Vec2i) -> Map {
         // We only modify even # indicies
         // Slots each have a cell between them that can
         // either be a wall or an empty cell
         let mut rng = rand::thread_rng();
-        let mut maze = Maze::new(self.size);
+        let mut maze = Map::new(self.size);
         maze.fill(true);
         let mut visited_slots = HashSet::<Vec2i>::new();
         let mut current_slots_stack: Vec<(Vec2i, Option<Vec2i>)> = vec![(start_pos, None)];
@@ -211,3 +216,112 @@ impl MazeGenerator {
         neighbors
     }
 }
+// endregion
+
+// region Agent
+#[derive(Debug, PartialEq, Eq)]
+pub enum AgentStatus {
+    Inactive,
+    Running,
+    Complete(bool),
+}
+
+pub struct Agent {
+    pub mind_map: Option<Map>,
+    pub position: Vec2i,
+    pub target_path: Vec<Vec2i>,
+    pub status: AgentStatus,
+}
+impl Agent {
+    pub fn new(start_pos: Vec2i) -> Agent {
+        Agent {
+            position: start_pos,
+            target_path: Vec::new(),
+            status: AgentStatus::Inactive,
+            mind_map: None,
+        }
+    }
+    pub fn init(&mut self, map_size: Vec2i) {
+        self.mind_map = Some(Map::new(map_size));
+        self.status = AgentStatus::Running
+    }
+    pub fn step(&mut self, world_map: &Map) {
+        let map = self
+            .mind_map
+            .as_mut()
+            .expect("Expect Agent to be initialized.");
+        for dir in Vec2i::DIRECTIONS_4_WAY {
+            let neighbor_pos = self.position + dir;
+            if let Ok(neighbor_value) = world_map.get_cell(neighbor_pos) {
+                map.set_cell(neighbor_pos, neighbor_value).unwrap();
+            }
+        }
+    }
+}
+// endregion
+
+// region Simulation
+pub struct Simulation {
+    pub map: Map,
+    pub agent: Agent,
+    pub steps: i32,
+    pub result: Option<bool>,
+}
+impl Simulation {
+    pub fn new(map: Map, mut agent: Agent) -> Simulation {
+        agent.init(map.size);
+        Simulation {
+            map,
+            agent,
+            steps: 0,
+            result: None,
+        }
+    }
+    pub fn is_running(&self) -> bool {
+        self.result.is_none()
+    }
+    pub fn is_complete(&self) -> bool {
+        self.result.is_some()
+    }
+    pub fn step(&mut self) {
+        if self.is_complete() {
+            return;
+        }
+        self.agent.step(&self.map);
+        self.steps += 1;
+        if let AgentStatus::Complete(result) = self.agent.status {
+            self.result = Some(result);
+        }
+    }
+}
+impl Display for Simulation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Simulation({}, {}) Step {}:\n",
+            self.map.size.x, self.map.size.y, self.steps
+        )?;
+        write!(f, "XX{}XX\n", "XX".repeat(self.map.size.x as usize))?;
+        for y in 0..self.map.size.y {
+            write!(f, "XX")?;
+            for x in 0..self.map.size.x {
+                let pos = Vec2i::new(x, y);
+                if self.map.get_cell(pos).unwrap() {
+                    write!(f, "{}", "XX")?;
+                } else {
+                    if self.agent.position == pos {
+                        write!(f, "{}", "AA".green())?;
+                    } else if self.agent.target_path.contains(&pos) {
+                        write!(f, "{}", "pp".cyan())?;
+                    } else {
+                        write!(f, "  ")?;
+                    }
+                }
+            }
+            write!(f, "XX\n")?;
+        }
+        write!(f, "XX{}XX\n", "XX".repeat(self.map.size.x as usize))?;
+        Ok(())
+    }
+}
+// endregion

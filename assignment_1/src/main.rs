@@ -4,28 +4,35 @@ use rand::{rngs::SmallRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use std::{
     collections::{BinaryHeap, HashSet},
     env,
-    fmt::Display,
+    fmt::{Debug, Display},
     hash::Hash,
     ops,
     rc::Rc,
+    sync::Mutex,
     thread::sleep,
     time::Duration,
     vec,
 };
+
+pub mod heap;
 
 fn main() {
     env::set_var("RUST_BACKTRACE", "1");
     let mut args: Vec<String> = env::args().collect();
 
     // Remove program name
-    args.remove(0);
+    args.reverse();
+    args.pop().unwrap();
     pub enum Mode {
+        HeapTests,
         AutoTests,
         ManualTest,
     }
     let mut mode: Mode = Mode::ManualTest;
-    if args.len() >= 1 {
-        let mode_str = args.remove(0);
+    if let Some(mode_str) = args.pop() {
+        if mode_str.to_lowercase() == "heap" {
+            mode = Mode::HeapTests;
+        }
         if mode_str.to_lowercase() == "auto" {
             mode = Mode::AutoTests;
         } else if mode_str.to_lowercase() == "manual" {
@@ -34,18 +41,26 @@ fn main() {
     }
 
     match mode {
+        Mode::HeapTests => heap::heap_tests(args),
         Mode::AutoTests => auto_tests(args),
         Mode::ManualTest => manual_test(args),
     }
 }
 
-fn auto_tests(args: Vec<String>) {}
+fn auto_tests(mut args: Vec<String>) {}
 
-fn manual_test(args: Vec<String>) {
+fn manual_test(mut args: Vec<String>) {
+    let mut rng_seed = thread_rng().gen();
+    if let Some(seed_str) = args.pop() {
+        if let Ok(seed_val) = seed_str.parse() {
+            rng_seed = seed_val;
+        }
+    }
+
     let mut size = Vec2i::new(51, 51);
-    if let Some(x_str) = args.get(0) {
+    if let Some(x_str) = args.pop() {
         if let Ok(x) = x_str.parse() {
-            if let Some(y_str) = args.get(1) {
+            if let Some(y_str) = args.pop() {
                 if let Ok(y) = y_str.parse() {
                     size = Vec2i::new(x, y);
                 }
@@ -53,7 +68,7 @@ fn manual_test(args: Vec<String>) {
         }
     }
     let mut interval: f32 = 0.25;
-    if let Some(interval_str) = args.get(2) {
+    if let Some(interval_str) = args.pop() {
         if let Ok(interval_val) = interval_str.parse() {
             interval = interval_val;
         }
@@ -64,7 +79,7 @@ fn manual_test(args: Vec<String>) {
         DFSRand,
     }
     let mut map_type = MapType::DFSRand;
-    if let Some(map_type_str) = args.get(3) {
+    if let Some(map_type_str) = args.pop() {
         if map_type_str.to_lowercase() == "dfs" {
             map_type = MapType::DFS;
         } else if map_type_str.to_lowercase() == "dfs-rand" {
@@ -73,7 +88,7 @@ fn manual_test(args: Vec<String>) {
     }
 
     let mut reachable_goal = false;
-    if let Some(reachable_goal_str) = args.get(4) {
+    if let Some(reachable_goal_str) = args.pop() {
         if reachable_goal_str.to_lowercase() == "reachable" {
             reachable_goal = true;
         } else if reachable_goal_str.to_lowercase() == "unreachable" {
@@ -81,18 +96,45 @@ fn manual_test(args: Vec<String>) {
         }
     }
 
-    let mut rng_seed = thread_rng().gen();
-    if let Some(seed_str) = args.get(5) {
-        if let Ok(seed_val) = seed_str.parse() {
-            rng_seed = seed_val;
+    let mut break_tie_mode = BreakTieMode::None;
+    if let Some(break_tie_mode_str) = args.pop() {
+        if break_tie_mode_str.to_lowercase() == "none" {
+            break_tie_mode = BreakTieMode::None;
+        } else if break_tie_mode_str.to_lowercase() == "high-g" {
+            break_tie_mode = BreakTieMode::HigherGCost;
+        } else if break_tie_mode_str.to_lowercase() == "low-g" {
+            break_tie_mode = BreakTieMode::LowerGCost;
         }
     }
-    let mut map_gen = MazeGenerator::new(rng_seed, size);
+
+    let mut is_forward = false;
+    if let Some(reachable_goal_str) = args.pop() {
+        if reachable_goal_str.to_lowercase() == "forward" {
+            is_forward = true;
+        } else if reachable_goal_str.to_lowercase() == "backward" {
+            is_forward = false;
+        }
+    }
+
+    let mut ai_behavior: Box<dyn AgentBehavior> = Box::new(AStarBehavior {
+        break_tie_mode,
+        is_forward,
+    });
+    if let Some(ai_behavior_str) = args.pop() {
+        if ai_behavior_str.to_lowercase() == "astar" {
+            ai_behavior = Box::new(AStarBehavior::new(is_forward, break_tie_mode));
+        } else if ai_behavior_str.to_lowercase() == "adaptive-astar" {
+            ai_behavior = Box::new(AdaptiveAStarBehavior::new(break_tie_mode));
+        }
+    }
+
+    let mut map_gen = MazeBuilder::new(rng_seed, size);
     let rand_map = match map_type {
         MapType::DFS => map_gen.generate_dfs_map_default(),
         MapType::DFSRand => map_gen.generate_dfs_map_random_default(),
     };
-    let simulation = SimulationBuilder::from_map(rng_seed, rand_map.clone(), reachable_goal);
+    let simulation =
+        SimulationBuilder::from_map(rng_seed, rand_map.clone(), reachable_goal, ai_behavior);
     if let Some(simulation) = simulation {
         let mut runner = SimulationRunner::new(simulation, interval, true);
         runner.run();
@@ -110,6 +152,7 @@ pub struct Vec2i {
 }
 impl Vec2i {
     pub const ZERO: Vec2i = Vec2i { x: 0, y: 0 };
+    pub const ONE: Vec2i = Vec2i { x: 1, y: 1 };
     pub const UP: Vec2i = Vec2i { x: 0, y: 1 };
     pub const DOWN: Vec2i = Vec2i { x: 0, y: -1 };
     pub const LEFT: Vec2i = Vec2i { x: -1, y: 0 };
@@ -297,6 +340,7 @@ impl<T: Clone + Default> Map<T> {
     }
     pub fn resize(&mut self, size: Vec2i) {
         self.cells.resize((size.x * size.y) as usize, T::default());
+        self.size = size;
     }
     pub fn is_in_bounds(&self, position: Vec2i) -> bool {
         position.x >= 0 && position.y >= 0 && position.x < self.size.x && position.y < self.size.y
@@ -343,14 +387,14 @@ pub enum MapError {
 }
 // endregion
 
-// region MazeGenerator
-pub struct MazeGenerator {
+// region MazeBuilder
+pub struct MazeBuilder {
     pub size: Vec2i,
     pub rng: SmallRng,
 }
-impl MazeGenerator {
-    pub fn new(rng_seed: u64, size: Vec2i) -> MazeGenerator {
-        MazeGenerator {
+impl MazeBuilder {
+    pub fn new(rng_seed: u64, size: Vec2i) -> MazeBuilder {
+        MazeBuilder {
             size,
             rng: SmallRng::seed_from_u64(rng_seed),
         }
@@ -384,8 +428,8 @@ impl MazeGenerator {
         let mut map = self.generate_dfs_map(start_pos);
         let total_cells = (self.size.x * self.size.y) as usize;
 
-        self.set_rand_cells(&mut map, start_pos, total_cells / 10, false);
-        self.set_rand_cells(&mut map, start_pos, total_cells / 20, true);
+        self.set_rand_cells(&mut map, start_pos, total_cells / 14, false);
+        self.set_rand_cells(&mut map, start_pos, total_cells / 18, true);
         map
     }
     fn set_rand_cells(&mut self, map: &mut WallMap, start_pos: Vec2i, amount: usize, value: bool) {
@@ -399,6 +443,7 @@ impl MazeGenerator {
             let rand_pos = start_cell + rand_slot * 2;
             let rand_dir = Vec2i::DIRECTIONS_4_WAY[self.rng.gen_range(0..4)];
             let rand_wall_pos = rand_pos + rand_dir;
+            // Random cell might be out of bounds, but we don't care
             let _ = map.set_cell(rand_wall_pos, value);
         }
     }
@@ -443,6 +488,195 @@ impl MazeGenerator {
 }
 // endregion
 
+// region AgentBehavior
+pub trait AgentBehavior: Debug {
+    /// Initializes the behavior
+    fn init(&mut self, _map_size: Vec2i) {}
+    /// Attempts to find a path from the agent's current position to the goal
+    ///
+    /// Returns path from self to goal in reversed order (first = goal, last = path)
+    fn pathfind(&mut self, agent: &Agent) -> Vec<Vec2i>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BreakTieMode {
+    HigherGCost,
+    None,
+    LowerGCost,
+}
+
+#[derive(Debug)]
+pub struct AStarBehavior {
+    pub is_forward: bool,
+    pub break_tie_mode: BreakTieMode,
+}
+impl AStarBehavior {
+    pub fn new(is_forward: bool, break_tie_mode: BreakTieMode) -> AStarBehavior {
+        AStarBehavior {
+            is_forward,
+            break_tie_mode,
+        }
+    }
+    /// Returns path from start to end, excluding start
+    /// Given in stack order (end position is first, start position is last)
+    fn astar_pathfind(
+        wall_map: &WallMap,
+        start: Vec2i,
+        end: Vec2i,
+        break_tie_mode: BreakTieMode,
+    ) -> Vec<Vec2i> {
+        let mut open_states = BinaryHeap::<Rc<AStarState>>::new();
+        let mut closed_cells = HashSet::<Vec2i>::new();
+
+        open_states.push(Rc::new(AStarState::from_g_h_costs(
+            0,
+            start.manhattan_distance(&end),
+            start,
+            None,
+            break_tie_mode,
+        )));
+        while let Some(curr_state) = open_states.pop() {
+            if closed_cells.contains(&curr_state.cell) {
+                // There was an earlier path that beat us to the punch.
+                // This state is no longer relevant.
+                continue;
+            }
+            closed_cells.insert(curr_state.cell);
+            if curr_state.cell == end {
+                // Path has been found
+                let mut path = vec![curr_state.cell];
+                let mut curr_state_ref = &curr_state;
+                // Create path by walking up the parent chain
+                while let Some(parent_state) = curr_state_ref.parent_state.as_ref() {
+                    path.push(parent_state.cell);
+                    curr_state_ref = parent_state;
+                }
+                // No need to include the starting positioon
+                path.pop();
+                return path;
+            }
+            for (neighbor_cell, neighbor_filled) in
+                wall_map.get_neighbor_cells_4_way(curr_state.cell)
+            {
+                // Only consider neighbors that are empty and are not explored yet
+                if !neighbor_filled && !closed_cells.contains(&neighbor_cell) {
+                    open_states.push(Rc::new(AStarState::from_g_h_costs(
+                        curr_state.actual_cost + 1,             // Cost for every move is 1
+                        neighbor_cell.manhattan_distance(&end), // Heuristic is the manhattan distance between the cell and the goal
+                        neighbor_cell,
+                        Some(curr_state.clone()),
+                        break_tie_mode,
+                    )));
+                }
+            }
+        }
+        // No path found
+        vec![]
+    }
+}
+impl AgentBehavior for AStarBehavior {
+    fn pathfind(&mut self, agent: &Agent) -> Vec<Vec2i> {
+        let mut start = agent.position;
+        let mut end = agent.goal;
+        if !self.is_forward {
+            start = agent.goal;
+            end = agent.position;
+        }
+        let mut path = Self::astar_pathfind(&agent.mind_map, start, end, self.break_tie_mode);
+        if !self.is_forward {
+            path.reverse()
+        }
+        path
+    }
+}
+
+#[derive(Debug)]
+pub struct AdaptiveAStarBehavior {
+    pub break_tie_mode: BreakTieMode,
+    pub actual_cost_map: Map<i32>,
+}
+impl AdaptiveAStarBehavior {
+    pub fn new(break_tie_mode: BreakTieMode) -> AdaptiveAStarBehavior {
+        AdaptiveAStarBehavior {
+            break_tie_mode,
+            actual_cost_map: Map::<i32>::new(Vec2i::ONE),
+        }
+    }
+    fn calc_heuristic_cost(&self, agent: &Agent, position: Vec2i) -> i32 {
+        let cached_actual_cost = self.actual_cost_map.get_cell(position).unwrap();
+        if cached_actual_cost > 0 {
+            // h(s) = g(s_goal) - g(s)
+            self.actual_goal_cost(agent) - cached_actual_cost
+        } else {
+            position.manhattan_distance(&agent.goal)
+        }
+    }
+    fn actual_goal_cost(&self, agent: &Agent) -> i32 {
+        self.actual_cost_map.get_cell(agent.goal).unwrap()
+    }
+}
+impl AgentBehavior for AdaptiveAStarBehavior {
+    fn init(&mut self, map_size: Vec2i) {
+        self.actual_cost_map.resize(map_size);
+        self.actual_cost_map.fill(-1);
+    }
+    fn pathfind(&mut self, agent: &Agent) -> Vec<Vec2i> {
+        let mut open_states = BinaryHeap::<Rc<AStarState>>::new();
+        let mut closed_cells = HashSet::<Vec2i>::new();
+
+        self.actual_cost_map.set_cell(agent.position, 0).unwrap();
+        open_states.push(Rc::new(AStarState::from_g_h_costs(
+            0,
+            self.calc_heuristic_cost(agent, agent.position),
+            agent.position,
+            None,
+            self.break_tie_mode,
+        )));
+        while let Some(curr_state) = open_states.pop() {
+            if closed_cells.contains(&curr_state.cell) {
+                // There was an earlier path that beat us to the punch.
+                // This state is no longer relevant.
+                continue;
+            }
+            closed_cells.insert(curr_state.cell);
+            if curr_state.cell == agent.goal {
+                // Path has been found
+                let mut path = vec![curr_state.cell];
+                let mut curr_state_ref = &curr_state;
+                // Create path by walking up the parent chain
+                while let Some(parent_state) = curr_state_ref.parent_state.as_ref() {
+                    path.push(parent_state.cell);
+                    curr_state_ref = parent_state;
+                }
+                // No need to include the starting positioon
+                path.pop();
+                return path;
+            }
+            for (neighbor_cell, neighbor_filled) in
+                agent.mind_map.get_neighbor_cells_4_way(curr_state.cell)
+            {
+                // Only consider neighbors that are empty and are not explored yet
+                if !neighbor_filled && !closed_cells.contains(&neighbor_cell) {
+                    let actual_cost = curr_state.actual_cost + 1;
+                    self.actual_cost_map
+                        .set_cell(agent.position, actual_cost)
+                        .unwrap();
+                    open_states.push(Rc::new(AStarState::from_g_h_costs(
+                        actual_cost, // Cost for every move is 1
+                        self.calc_heuristic_cost(agent, neighbor_cell),
+                        neighbor_cell,
+                        Some(curr_state.clone()),
+                        self.break_tie_mode,
+                    )));
+                }
+            }
+        }
+        // No path found
+        vec![]
+    }
+}
+// endregion
+
 // region Agent
 #[derive(Debug, PartialEq, Eq)]
 pub enum AgentStatus {
@@ -451,6 +685,7 @@ pub enum AgentStatus {
     Complete(bool),
 }
 
+#[derive(Debug)]
 pub struct Agent {
     /// Agent's mental map of the environment
     pub mind_map: WallMap,
@@ -466,27 +701,53 @@ pub struct Agent {
     /// - Running after the agent is initialized
     /// - Complete after the agent finishes path finding (Either the goal was reached or no path can be found)
     pub status: AgentStatus,
+    /// Behavior of the agent
+    pub behavior: Mutex<Box<dyn AgentBehavior>>,
 }
-#[derive(Hash, Clone)]
+#[derive(Clone)]
 struct AStarState {
+    pub heap_cost: i32,
     pub actual_cost: i32,
     pub heuristic_cost: i32,
     pub cell: Vec2i,
     pub parent_state: Option<Rc<AStarState>>,
 }
 impl AStarState {
-    pub fn f_cost(&self) -> i32 {
-        self.actual_cost + self.heuristic_cost
-    }
-    pub fn heap_f_cost(&self) -> i32 {
-        // BinaryHeap is MaxHeap by default, so we need to negate the cost to make it a min heap
-        -self.f_cost()
+    // Scaling factor used to break ties.
+    const F_SCALE: i32 = 46_340;
+    // Maximum supported map width. At this width and height, the maximum
+    // distance between the corners of the map = F_SCALE
+    const MAX_MAP_WIDTH: i32 = Self::F_SCALE / 2;
+    pub fn from_g_h_costs(
+        actual_cost: i32,
+        heuristic_cost: i32,
+        cell: Vec2i,
+        parent_state: Option<Rc<AStarState>>,
+        break_tie_mode: BreakTieMode,
+    ) -> AStarState {
+        let cost = match break_tie_mode {
+            BreakTieMode::HigherGCost => {
+                Self::F_SCALE * (actual_cost + heuristic_cost) - actual_cost
+            }
+            BreakTieMode::None => actual_cost + heuristic_cost,
+            BreakTieMode::LowerGCost => {
+                Self::F_SCALE * (actual_cost + heuristic_cost) - (Self::F_SCALE - actual_cost)
+            }
+        };
+        AStarState {
+            cell,
+            actual_cost,
+            heuristic_cost,
+            // Convert the max heap into a min heap.
+            heap_cost: -cost,
+            parent_state,
+        }
     }
 }
 impl Eq for AStarState {}
 impl PartialEq for AStarState {
     fn eq(&self, other: &Self) -> bool {
-        self.heap_f_cost() == other.heap_f_cost()
+        self.heap_cost == other.heap_cost
     }
 }
 impl PartialOrd for AStarState {
@@ -496,18 +757,24 @@ impl PartialOrd for AStarState {
 }
 impl Ord for AStarState {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.heap_f_cost().cmp(&other.heap_f_cost())
+        self.heap_cost.cmp(&other.heap_cost)
     }
 }
 impl Agent {
-    pub fn new(map_size: Vec2i, start_pos: Vec2i, goal: Vec2i) -> Agent {
+    pub fn new(start_pos: Vec2i, goal: Vec2i, behavior: Box<dyn AgentBehavior>) -> Agent {
         Agent {
             position: start_pos,
             goal,
             target_path: Vec::new(),
-            status: AgentStatus::Running,
-            mind_map: WallMap::new(map_size),
+            status: AgentStatus::Inactive,
+            mind_map: WallMap::new(Vec2i::ONE),
+            behavior: Mutex::new(behavior),
         }
+    }
+    pub fn init(&mut self, map_size: Vec2i) {
+        self.mind_map.resize(map_size);
+        self.behavior.try_lock().unwrap().init(map_size);
+        self.status = AgentStatus::Running;
     }
     pub fn step(&mut self, world_map: &WallMap) {
         assert!(
@@ -539,7 +806,7 @@ impl Agent {
         }
         if path_needs_update {
             // Only regenerate the path if an update is needed
-            self.target_path = self.astar_pathfind();
+            self.target_path = self.behavior.try_lock().unwrap().pathfind(self);
         }
         if let Some(new_pos) = self.target_path.pop() {
             // We have a path, so we move towards the path
@@ -553,59 +820,11 @@ impl Agent {
             self.status = AgentStatus::Complete(false);
         }
     }
-    /// Attempts to find a path from the agent's current position to the goal
-    ///
-    /// Returns path from self to goal in reversed order (first = goal, last = path)
-    pub fn astar_pathfind(&self) -> Vec<Vec2i> {
-        let mut open_states = BinaryHeap::<Rc<AStarState>>::new();
-        let mut closed_cells = HashSet::<Vec2i>::new();
-        open_states.push(Rc::new(AStarState {
-            actual_cost: 0,
-            heuristic_cost: self.position.manhattan_distance(&self.goal),
-            cell: self.position,
-            parent_state: None,
-        }));
-        while let Some(curr_state) = open_states.pop() {
-            if closed_cells.contains(&curr_state.cell) {
-                // There was an earlier path that beat us to the punch.
-                // This state is no longer relevant.
-                continue;
-            }
-            closed_cells.insert(curr_state.cell);
-            if curr_state.cell == self.goal {
-                // Path has been found
-                let mut path = vec![curr_state.cell];
-                let mut curr_state_ref = &curr_state;
-                // Create path by walking up the parent chain
-                while let Some(parent_state) = curr_state_ref.parent_state.as_ref() {
-                    path.push(parent_state.cell);
-                    curr_state_ref = parent_state;
-                }
-                // No need to include the starting positioon
-                path.pop();
-                return path;
-            }
-            for (neighbor_cell, neighbor_filled) in
-                self.mind_map.get_neighbor_cells_4_way(curr_state.cell)
-            {
-                // Only consider neighbors that are empty and are not explored yet
-                if !neighbor_filled && !closed_cells.contains(&neighbor_cell) {
-                    open_states.push(Rc::new(AStarState {
-                        actual_cost: curr_state.actual_cost + 1, // Cost for every move is 1
-                        heuristic_cost: neighbor_cell.manhattan_distance(&self.goal), // Heuristic is the manhattan distance between the cell and the goal
-                        cell: neighbor_cell,
-                        parent_state: Some(curr_state.clone()),
-                    }));
-                }
-            }
-        }
-        // No path found
-        vec![]
-    }
 }
 // endregion
 
 // region Simulation
+#[derive(Debug)]
 pub struct Simulation {
     pub wall_map: WallMap,
     pub connected_components_map: ConnectedComponentsMap,
@@ -615,8 +834,9 @@ pub struct Simulation {
     pub result: Option<bool>,
 }
 impl Simulation {
-    pub fn new(map: WallMap, agent: Agent) -> Simulation {
+    pub fn new(map: WallMap, mut agent: Agent) -> Simulation {
         let connected_components_map = ConnectedComponentsMap::from_wall_map(&map);
+        agent.init(map.size);
         Simulation {
             wall_map: map,
             connected_components_map,
@@ -757,7 +977,12 @@ impl Display for Simulation {
 // region SimulationBuilder
 pub struct SimulationBuilder;
 impl SimulationBuilder {
-    pub fn from_map(rng_seed: u64, map: WallMap, set_reachable_goal: bool) -> Option<Simulation> {
+    pub fn from_map(
+        rng_seed: u64,
+        map: WallMap,
+        set_reachable_goal: bool,
+        agent_behavior: Box<dyn AgentBehavior>,
+    ) -> Option<Simulation> {
         let goal = {
             if set_reachable_goal {
                 map.find_longest_reachable_goal(Vec2i::ZERO)
@@ -769,7 +994,7 @@ impl SimulationBuilder {
                 }
             }
         };
-        let agent = Agent::new(map.size, Vec2i::ZERO, goal);
+        let agent = Agent::new(Vec2i::ZERO, goal, agent_behavior);
         Some(Simulation::new(map, agent))
     }
 }

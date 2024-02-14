@@ -10,7 +10,7 @@ use std::{
     rc::Rc,
     sync::Mutex,
     thread::sleep,
-    time::Duration,
+    time::{Duration, Instant},
     vec,
 };
 
@@ -47,7 +47,84 @@ fn main() {
     }
 }
 
-fn auto_tests(mut args: Vec<String>) {}
+fn auto_tests(mut args: Vec<String>) {
+    let mut rng_seed = thread_rng().gen();
+    if let Some(seed_str) = args.pop() {
+        if let Ok(seed_val) = seed_str.parse() {
+            rng_seed = seed_val;
+        }
+    }
+
+    let trials = 50;
+    let mut builder = MazeBuilder::new(rng_seed, Vec2i::new(51, 51));
+    let mut maps = Vec::new();
+    for _ in 0..trials {
+        let map = builder.generate_dfs_map_default();
+        maps.push(map);
+    }
+
+    auto_test_behavior(
+        "A* Forward",
+        rng_seed,
+        &maps,
+        AStarBehavior::new(true, BreakTieMode::HigherGCost),
+    );
+
+    auto_test_behavior(
+        "A* Backward",
+        rng_seed,
+        &maps,
+        AStarBehavior::new(false, BreakTieMode::HigherGCost),
+    );
+
+    auto_test_behavior(
+        "A* Forward Lower G",
+        rng_seed,
+        &maps,
+        AStarBehavior::new(true, BreakTieMode::LowerGCost),
+    );
+
+    auto_test_behavior(
+        "A* Forward Higher G",
+        rng_seed,
+        &maps,
+        AStarBehavior::new(true, BreakTieMode::HigherGCost),
+    );
+
+    auto_test_behavior(
+        "Adaptive A*",
+        rng_seed,
+        &maps,
+        AdaptiveAStarBehavior::new(BreakTieMode::HigherGCost),
+    );
+}
+
+fn auto_test_behavior<T: AgentBehavior + Clone + 'static>(
+    name: &str,
+    rng_seed: u64,
+    maps: &Vec<WallMap>,
+    agent_behavior: T,
+) {
+    let mut total_time: f32 = 0.0;
+    for map in maps.iter() {
+        let simulation = SimulationBuilder::from_map(
+            rng_seed,
+            map.clone(),
+            true,
+            Box::new(agent_behavior.clone()),
+        )
+        .expect("Expect building to work.");
+        let mut instant_runner = SimulationRunner::new_instant(simulation);
+        let now = Instant::now();
+        {
+            instant_runner.run_instant();
+        }
+        let elapsed_time = now.elapsed();
+        total_time += elapsed_time.as_millis() as f32;
+    }
+    let average_time = total_time / maps.len() as f32;
+    println!("{}: Average: {} ms", name, average_time);
+}
 
 fn manual_test(mut args: Vec<String>) {
     let mut rng_seed = thread_rng().gen();
@@ -57,7 +134,7 @@ fn manual_test(mut args: Vec<String>) {
         }
     }
 
-    let mut size = Vec2i::new(51, 51);
+    let mut size = Vec2i::new(25, 25);
     if let Some(x_str) = args.pop() {
         if let Ok(x) = x_str.parse() {
             if let Some(y_str) = args.pop() {
@@ -505,7 +582,7 @@ pub enum BreakTieMode {
     LowerGCost,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AStarBehavior {
     pub is_forward: bool,
     pub break_tie_mode: BreakTieMode,
@@ -551,8 +628,6 @@ impl AStarBehavior {
                     path.push(parent_state.cell);
                     curr_state_ref = parent_state;
                 }
-                // No need to include the starting positioon
-                path.pop();
                 return path;
             }
             for (neighbor_cell, neighbor_filled) in
@@ -586,11 +661,13 @@ impl AgentBehavior for AStarBehavior {
         if !self.is_forward {
             path.reverse()
         }
+        // No need to include the starting positioon
+        path.pop();
         path
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdaptiveAStarBehavior {
     pub break_tie_mode: BreakTieMode,
     pub actual_cost_map: Map<i32>,
@@ -1007,6 +1084,9 @@ pub struct SimulationRunner {
     pub print: bool,
 }
 impl SimulationRunner {
+    pub fn new_instant(simulation: Simulation) -> SimulationRunner {
+        SimulationRunner::new(simulation, 0.0, false)
+    }
     pub fn new(simulation: Simulation, interval: f32, print: bool) -> SimulationRunner {
         SimulationRunner {
             simulation,
@@ -1015,6 +1095,10 @@ impl SimulationRunner {
         }
     }
     pub fn run(&mut self) -> bool {
+        if self.is_instant() {
+            return self.run_instant();
+        }
+
         if self.print {
             clearscreen::clear().unwrap();
             println!("🚀 Simulation Start");
@@ -1022,8 +1106,10 @@ impl SimulationRunner {
         }
         while self.simulation.is_running() {
             self.simulation.step();
-            clearscreen::clear().unwrap();
-            println!("{}", self.simulation);
+            if self.print {
+                clearscreen::clear().unwrap();
+                println!("{}", self.simulation);
+            }
             if self.interval > 0.0 {
                 sleep(Duration::from_secs_f32(self.interval))
             }
@@ -1036,6 +1122,15 @@ impl SimulationRunner {
             println!("🛑 Simulation End. Goal Reached? {}", result);
         }
         result
+    }
+    pub fn run_instant(&mut self) -> bool {
+        while self.simulation.is_running() {
+            self.simulation.step();
+        }
+        self.simulation.result.unwrap()
+    }
+    pub fn is_instant(&self) -> bool {
+        !self.print && self.interval <= 0.0
     }
 }
 // endregion

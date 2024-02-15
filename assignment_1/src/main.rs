@@ -4,7 +4,7 @@ use rand::{rngs::SmallRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use std::{
     collections::{BinaryHeap, HashSet},
     env,
-    fmt::{Debug, Display},
+    fmt::{format, Debug, Display},
     hash::Hash,
     ops,
     rc::Rc,
@@ -62,6 +62,11 @@ fn auto_tests(mut args: Vec<String>) {
         let map = builder.generate_dfs_map_default();
         maps.push(map);
     }
+
+    println!(
+        "🤖 Auto Tests\nDFS Map, Trials: {}, RNG Seed: {}",
+        trials, rng_seed
+    );
 
     auto_test_behavior(
         "A* Forward",
@@ -573,6 +578,46 @@ pub trait AgentBehavior: Debug {
     ///
     /// Returns path from self to goal in reversed order (first = goal, last = path)
     fn pathfind(&mut self, agent: &Agent) -> Vec<Vec2i>;
+    /// Prints a representation of the agent's behavior
+    fn map_str(&self, agent: &Agent, prev_agent_pos: Vec2i) -> String {
+        let mut str = String::new();
+        str += &format!(
+            "{}\n",
+            "XX".repeat(agent.mind_map.size.x as usize + 2)
+                .on_truecolor(125, 125, 125)
+        );
+        let agent_path_hashset: HashSet<Vec2i> = agent.target_path.clone().into_iter().collect();
+        for y in 0..agent.mind_map.size.y {
+            str += &format!("{}", "XX".on_truecolor(125, 125, 125));
+            for x in 0..agent.mind_map.size.x {
+                let pos = Vec2i::new(x, y);
+                if agent.mind_map.get_cell(pos).unwrap() {
+                    str += &format!("{}", "XX".on_truecolor(125, 125, 125));
+                } else {
+                    if prev_agent_pos == pos {
+                        str +=
+                            &format!("{}", "AA".truecolor(172, 240, 46).on_truecolor(69, 163, 65));
+                    } else if agent.goal == pos {
+                        str += &format!(
+                            "{}",
+                            "GG".truecolor(240, 227, 46).on_truecolor(230, 137, 39)
+                        );
+                    } else if agent_path_hashset.contains(&pos) || pos == agent.position {
+                        str += &format!("{}", "pp".cyan());
+                    } else {
+                        str += "  ";
+                    }
+                }
+            }
+            str += &format!("{}\n", "XX".on_truecolor(125, 125, 125));
+        }
+        str += &format!(
+            "{}\n",
+            "XX".repeat(agent.mind_map.size.x as usize + 2)
+                .on_truecolor(125, 125, 125)
+        );
+        str
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -681,7 +726,7 @@ impl AdaptiveAStarBehavior {
     }
     fn calc_heuristic_cost(&self, agent: &Agent, position: Vec2i) -> i32 {
         let cached_actual_cost = self.actual_cost_map.get_cell(position).unwrap();
-        if cached_actual_cost > 0 {
+        if cached_actual_cost > 0 && self.actual_goal_cost(agent) > 0 {
             // h(s) = g(s_goal) - g(s)
             self.actual_goal_cost(agent) - cached_actual_cost
         } else {
@@ -734,13 +779,15 @@ impl AgentBehavior for AdaptiveAStarBehavior {
             {
                 // Only consider neighbors that are empty and are not explored yet
                 if !neighbor_filled && !closed_cells.contains(&neighbor_cell) {
+                    // TODO NOW: Fix this
                     let actual_cost = curr_state.actual_cost + 1;
+                    let heuristic = self.calc_heuristic_cost(agent, neighbor_cell);
                     self.actual_cost_map
-                        .set_cell(agent.position, actual_cost)
+                        .set_cell(neighbor_cell, actual_cost)
                         .unwrap();
                     open_states.push(Rc::new(AStarState::from_g_h_costs(
                         actual_cost, // Cost for every move is 1
-                        self.calc_heuristic_cost(agent, neighbor_cell),
+                        heuristic,
                         neighbor_cell,
                         Some(curr_state.clone()),
                         self.break_tie_mode,
@@ -750,6 +797,126 @@ impl AgentBehavior for AdaptiveAStarBehavior {
         }
         // No path found
         vec![]
+    }
+    fn map_str(&self, agent: &Agent, prev_agent_pos: Vec2i) -> String {
+        let mut str = String::new();
+        str += &format!(
+            "{}\n",
+            "XX".repeat(agent.mind_map.size.x as usize + 2)
+                .on_truecolor(125, 125, 125)
+        );
+        let agent_path_hashset: HashSet<Vec2i> = agent.target_path.clone().into_iter().collect();
+        for y in 0..agent.mind_map.size.y {
+            str += &format!("{}", "XX".on_truecolor(125, 125, 125));
+            for x in 0..agent.mind_map.size.x {
+                let pos = Vec2i::new(x, y);
+                if agent.mind_map.get_cell(pos).unwrap() {
+                    str += &format!("{}", "XX".on_truecolor(125, 125, 125));
+                } else {
+                    if prev_agent_pos == pos {
+                        str +=
+                            &format!("{}", "AA".truecolor(172, 240, 46).on_truecolor(69, 163, 65));
+                    } else if agent.goal == pos {
+                        str += &format!(
+                            "{}",
+                            "GG".truecolor(240, 227, 46).on_truecolor(230, 137, 39)
+                        );
+                    } else {
+                        let actual_cost = self.actual_cost_map.get_cell(pos).unwrap();
+                        // Set cell string
+                        let cell_str = {
+                            if actual_cost >= 0 {
+                                if actual_cost <= 99 {
+                                    format!("{: >2}", actual_cost)
+                                } else {
+                                    "..".to_owned()
+                                }
+                            } else {
+                                "  ".to_owned()
+                            }
+                        };
+
+                        fn get_colored_tile(
+                            cell_str: String,
+                            position: Vec2i,
+                            fg_1: (u8, u8, u8),
+                            fg_2: (u8, u8, u8),
+                            bg_1: (u8, u8, u8),
+                            bg_2: (u8, u8, u8),
+                        ) -> String {
+                            if position.y % 2 == 0 {
+                                if position.x % 2 == 1 {
+                                    format!(
+                                        "{}",
+                                        cell_str
+                                            .truecolor(fg_1.0, fg_1.1, fg_1.2)
+                                            .on_truecolor(bg_1.0, bg_1.1, bg_1.2)
+                                    )
+                                } else {
+                                    format!(
+                                        "{}",
+                                        cell_str
+                                            .truecolor(fg_2.0, fg_2.1, fg_2.2)
+                                            .on_truecolor(bg_2.0, bg_2.1, bg_2.2)
+                                    )
+                                }
+                            } else {
+                                if position.x % 2 == 0 {
+                                    format!(
+                                        "{}",
+                                        cell_str
+                                            .truecolor(fg_1.0, fg_1.1, fg_1.2)
+                                            .on_truecolor(bg_1.0, bg_1.1, bg_1.2)
+                                    )
+                                } else {
+                                    format!(
+                                        "{}",
+                                        cell_str
+                                            .truecolor(fg_2.0, fg_2.1, fg_2.2)
+                                            .on_truecolor(bg_2.0, bg_2.1, bg_2.2)
+                                    )
+                                }
+                            }
+                        }
+
+                        let cell_on_path =
+                            agent_path_hashset.contains(&pos) || pos == agent.position;
+
+                        // Checkerboard BG
+                        str += &{
+                            if cell_on_path {
+                                // Checkboard Blue FG Blue BG
+                                get_colored_tile(
+                                    cell_str,
+                                    pos,
+                                    (97, 142, 255),
+                                    (97, 142, 255),
+                                    (54, 62, 181),
+                                    (36, 41, 115),
+                                )
+                            } else {
+                                // Checkboard Red FG Black BG
+                                get_colored_tile(
+                                    cell_str,
+                                    pos,
+                                    (214, 43, 43),
+                                    (214, 43, 43),
+                                    (69, 65, 65),
+                                    (0, 0, 0),
+                                )
+                            }
+                        };
+                    }
+                }
+            }
+            str += &format!("{}\n", "XX".on_truecolor(125, 125, 125));
+        }
+        str += &format!(
+            "{}\n",
+            "XX".repeat(agent.mind_map.size.x as usize + 2)
+                .on_truecolor(125, 125, 125)
+        );
+        str
     }
 }
 // endregion
@@ -897,6 +1064,10 @@ impl Agent {
             self.status = AgentStatus::Complete(false);
         }
     }
+    pub fn mind_map_str(&self, prev_agent_pos: Vec2i) -> String {
+        let behavior = self.behavior.try_lock().unwrap();
+        behavior.map_str(self, prev_agent_pos)
+    }
 }
 // endregion
 
@@ -946,7 +1117,12 @@ impl Simulation {
             "Simulation({}, {}) Step {}:\n",
             self.wall_map.size.x, self.wall_map.size.y, self.steps
         );
-        for (line, line_2) in self.mind_map_str().lines().zip(self.full_map_str().lines()) {
+        for (line, line_2) in self
+            .agent
+            .mind_map_str(self.prev_agent_pos)
+            .lines()
+            .zip(self.full_map_str().lines())
+        {
             str += &format!("{}     {}\n", line, line_2);
         }
         str
@@ -990,46 +1166,6 @@ impl Simulation {
                         );
                     } else {
                         str += &self.get_connected_component_string(pos);
-                    }
-                }
-            }
-            str += &format!("{}\n", "XX".on_truecolor(125, 125, 125));
-        }
-        str += &format!(
-            "{}\n",
-            "XX".repeat(self.wall_map.size.x as usize + 2)
-                .on_truecolor(125, 125, 125)
-        );
-        str
-    }
-    pub fn mind_map_str(&self) -> String {
-        let mut str = String::new();
-        str += &format!(
-            "{}\n",
-            "XX".repeat(self.wall_map.size.x as usize + 2)
-                .on_truecolor(125, 125, 125)
-        );
-        let agent_path_hashset: HashSet<Vec2i> =
-            self.agent.target_path.clone().into_iter().collect();
-        for y in 0..self.wall_map.size.y {
-            str += &format!("{}", "XX".on_truecolor(125, 125, 125));
-            for x in 0..self.wall_map.size.x {
-                let pos = Vec2i::new(x, y);
-                if self.agent.mind_map.get_cell(pos).unwrap() {
-                    str += &format!("{}", "XX".on_truecolor(125, 125, 125));
-                } else {
-                    if self.prev_agent_pos == pos {
-                        str +=
-                            &format!("{}", "AA".truecolor(172, 240, 46).on_truecolor(69, 163, 65));
-                    } else if self.agent.goal == pos {
-                        str += &format!(
-                            "{}",
-                            "GG".truecolor(240, 227, 46).on_truecolor(230, 137, 39)
-                        );
-                    } else if agent_path_hashset.contains(&pos) || pos == self.agent.position {
-                        str += &format!("{}", "pp".cyan());
-                    } else {
-                        str += "  ";
                     }
                 }
             }

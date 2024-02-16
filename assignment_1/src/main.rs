@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use owo_colors::OwoColorize;
 use rand::{rngs::SmallRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use separator::Separatable;
 use std::{
     collections::{BinaryHeap, HashSet, VecDeque},
     env,
@@ -27,13 +28,15 @@ fn main() {
         HeapTests,
         AutoTests,
         ManualTest,
+        AdaptiveExample,
     }
     let mut mode: Mode = Mode::ManualTest;
     if let Some(mode_str) = args.pop() {
-        if mode_str.to_lowercase() == "heap" {
+        if mode_str.to_lowercase() == "adaptive" {
+            mode = Mode::AdaptiveExample;
+        } else if mode_str.to_lowercase() == "heap" {
             mode = Mode::HeapTests;
-        }
-        if mode_str.to_lowercase() == "auto" {
+        } else if mode_str.to_lowercase() == "auto" {
             mode = Mode::AutoTests;
         } else if mode_str.to_lowercase() == "manual" {
             mode = Mode::ManualTest;
@@ -41,9 +44,33 @@ fn main() {
     }
 
     match mode {
+        Mode::AdaptiveExample => test_adaptive_example(),
         Mode::HeapTests => heap::heap_tests(args),
         Mode::AutoTests => auto_tests(args),
         Mode::ManualTest => manual_test(args),
+    }
+}
+
+fn test_adaptive_example() {
+    let simulation_text = "
+_____
+_____
+__#__
+__#__
+__A#G
+";
+
+    if let Some(simulation) = SimulationBuilder::from_text(
+        simulation_text,
+        Box::new(AdaptiveAStarBehavior::new(BreakTieMode::HigherGCost)),
+    ) {
+        let mut runner = SimulationRunner::new(simulation, 0.5, true);
+        runner.run();
+    } else {
+        println!(
+            "⛔ Could not load simulation from text:\n{}",
+            simulation_text
+        );
     }
 }
 
@@ -133,6 +160,7 @@ fn auto_test_behavior<T: AgentBehavior + Clone + 'static>(
     agent_behavior: T,
 ) {
     let mut total_time: f32 = 0.0;
+    let mut total_expanded_cell_count: f32 = 0.0;
     for map in maps.iter() {
         let simulation = SimulationBuilder::from_map(
             rng_seed,
@@ -148,9 +176,16 @@ fn auto_test_behavior<T: AgentBehavior + Clone + 'static>(
         }
         let elapsed_time = now.elapsed();
         total_time += elapsed_time.as_millis() as f32;
+        total_expanded_cell_count += instant_runner.simulation.agent.expanded_cell_count as f32;
     }
     let average_time = total_time / maps.len() as f32;
-    println!("{}: Average: {} ms", name, average_time);
+    let average_expanded_cell_count = total_expanded_cell_count / maps.len() as f32;
+    println!(
+        "{}:\n  Average Time:           {} ms\n  Average Expanded Cells: {} cells",
+        name,
+        average_time,
+        average_expanded_cell_count.separated_string()
+    );
 }
 
 fn manual_test(mut args: Vec<String>) {
@@ -355,6 +390,21 @@ impl Display for Vec2i {
 }
 // endregion
 
+// region Utils
+pub trait StringExten {
+    fn join_sides_spaced(&self, other: &Self) -> Self;
+}
+impl StringExten for String {
+    fn join_sides_spaced(&self, other: &Self) -> Self {
+        let mut str = String::new();
+        for (line, line_2) in self.lines().zip(other.lines()) {
+            str += &format!("{}     {}\n", line, line_2);
+        }
+        str
+    }
+}
+// endregion
+
 // region Map
 pub type WallMap = Map<bool>;
 impl WallMap {
@@ -389,7 +439,7 @@ impl WallMap {
         while let Some(pos) = frontier_queue.pop_front() {
             for (neighbor, neighbor_filled) in self.get_neighbor_cells_4_way(pos) {
                 if !neighbor_filled && !visited.contains(&neighbor) {
-                    visited.insert(pos);
+                    visited.insert(neighbor);
                     frontier_queue.push_back(neighbor);
                 }
             }
@@ -466,8 +516,8 @@ impl ConnectedComponentsMap {
         let mut frontier_queue = VecDeque::<Vec2i>::new();
         frontier_queue.push_back(pos);
         visited.insert(pos);
-        self.set_cell(pos, component_id).unwrap();
         while let Some(pos) = frontier_queue.pop_front() {
+            self.set_cell(pos, component_id).unwrap();
             for (neighbor, neighbor_filled) in wall_map.get_neighbor_cells_4_way(pos) {
                 if !neighbor_filled && !visited.contains(&neighbor) {
                     visited.insert(neighbor);
@@ -657,8 +707,8 @@ pub trait AgentBehavior: Debug {
     fn init(&mut self, _map_size: Vec2i) {}
     /// Attempts to find a path from the agent's current position to the goal
     ///
-    /// Returns path from self to goal in reversed order (first = goal, last = path)
-    fn pathfind(&mut self, agent: &Agent) -> Vec<Vec2i>;
+    /// Returns (path from self to goal in reversed order (first = goal, last = path), number of expanded cells)
+    fn pathfind(&mut self, agent: &Agent) -> (VecDeque<Vec2i>, i32);
     /// Prints a representation of the agent's behavior
     fn map_str(&self, agent: &Agent, prev_agent_pos: Vec2i) -> String {
         let mut str = String::new();
@@ -724,13 +774,21 @@ impl AStarBehavior {
     /// Given in stack order (end position is first, start position is last)
     fn astar_pathfind(
         wall_map: &WallMap,
-        start: Vec2i,
-        end: Vec2i,
+        mut start: Vec2i,
+        mut end: Vec2i,
         break_tie_mode: BreakTieMode,
-    ) -> Vec<Vec2i> {
+        is_forward: bool,
+    ) -> (VecDeque<Vec2i>, i32) {
         let mut open_states = BinaryHeap::<Rc<AStarState>>::new();
         let mut closed_cells = HashSet::<Vec2i>::new();
 
+        if !is_forward {
+            let temp = start;
+            start = end;
+            end = temp;
+        }
+
+        let mut expanded_cell_count = 0;
         open_states.push(Rc::new(AStarState::from_g_h_costs(
             0,
             start.manhattan_distance(&end),
@@ -739,6 +797,7 @@ impl AStarBehavior {
             break_tie_mode,
         )));
         while let Some(curr_state) = open_states.pop() {
+            expanded_cell_count += 1;
             if closed_cells.contains(&curr_state.cell) {
                 // There was an earlier path that beat us to the punch.
                 // This state is no longer relevant.
@@ -747,14 +806,19 @@ impl AStarBehavior {
             closed_cells.insert(curr_state.cell);
             if curr_state.cell == end {
                 // Path has been found
-                let mut path = vec![curr_state.cell];
+                let mut path = VecDeque::new();
+                path.push_back(curr_state.cell);
                 let mut curr_state_ref = &curr_state;
                 // Create path by walking up the parent chain
                 while let Some(parent_state) = curr_state_ref.parent_state.as_ref() {
-                    path.push(parent_state.cell);
+                    if is_forward {
+                        path.push_front(parent_state.cell);
+                    } else {
+                        path.push_back(parent_state.cell);
+                    }
                     curr_state_ref = parent_state;
                 }
-                return path;
+                return (path, expanded_cell_count);
             }
             for (neighbor_cell, neighbor_filled) in
                 wall_map.get_neighbor_cells_4_way(curr_state.cell)
@@ -772,24 +836,21 @@ impl AStarBehavior {
             }
         }
         // No path found
-        vec![]
+        (VecDeque::new(), expanded_cell_count)
     }
 }
 impl AgentBehavior for AStarBehavior {
-    fn pathfind(&mut self, agent: &Agent) -> Vec<Vec2i> {
-        let mut start = agent.position;
-        let mut end = agent.goal;
-        if !self.is_forward {
-            start = agent.goal;
-            end = agent.position;
-        }
-        let mut path = Self::astar_pathfind(&agent.mind_map, start, end, self.break_tie_mode);
-        if !self.is_forward {
-            path.reverse()
-        }
+    fn pathfind(&mut self, agent: &Agent) -> (VecDeque<Vec2i>, i32) {
+        let (mut path, expanded_cell_count) = Self::astar_pathfind(
+            &agent.mind_map,
+            agent.position,
+            agent.goal,
+            self.break_tie_mode,
+            self.is_forward,
+        );
         // No need to include the starting positioon
-        path.pop();
-        path
+        path.pop_front();
+        (path, expanded_cell_count)
     }
 }
 
@@ -797,12 +858,16 @@ impl AgentBehavior for AStarBehavior {
 pub struct AdaptiveAStarBehavior {
     pub break_tie_mode: BreakTieMode,
     pub actual_cost_map: Map<i32>,
+    pub h_cost_map: Map<i32>,
+    pub f_cost_map: Map<i32>,
 }
 impl AdaptiveAStarBehavior {
     pub fn new(break_tie_mode: BreakTieMode) -> AdaptiveAStarBehavior {
         AdaptiveAStarBehavior {
             break_tie_mode,
             actual_cost_map: Map::<i32>::new(Vec2i::ONE),
+            h_cost_map: Map::<i32>::new(Vec2i::ONE),
+            f_cost_map: Map::<i32>::new(Vec2i::ONE),
         }
     }
     fn calc_heuristic_cost(&self, agent: &Agent, position: Vec2i) -> i32 {
@@ -817,66 +882,12 @@ impl AdaptiveAStarBehavior {
     fn actual_goal_cost(&self, agent: &Agent) -> i32 {
         self.actual_cost_map.get_cell(agent.goal).unwrap()
     }
-}
-impl AgentBehavior for AdaptiveAStarBehavior {
-    fn init(&mut self, map_size: Vec2i) {
-        self.actual_cost_map.resize(map_size);
-        self.actual_cost_map.fill(-1);
-    }
-    fn pathfind(&mut self, agent: &Agent) -> Vec<Vec2i> {
-        let mut open_states = BinaryHeap::<Rc<AStarState>>::new();
-        let mut closed_cells = HashSet::<Vec2i>::new();
-
-        self.actual_cost_map.set_cell(agent.position, 0).unwrap();
-        open_states.push(Rc::new(AStarState::from_g_h_costs(
-            0,
-            self.calc_heuristic_cost(agent, agent.position),
-            agent.position,
-            None,
-            self.break_tie_mode,
-        )));
-        while let Some(curr_state) = open_states.pop() {
-            if closed_cells.contains(&curr_state.cell) {
-                // There was an earlier path that beat us to the punch.
-                // This state is no longer relevant.
-                continue;
-            }
-            closed_cells.insert(curr_state.cell);
-            if curr_state.cell == agent.goal {
-                // Path has been found
-                let mut path = vec![curr_state.cell];
-                let mut curr_state_ref = &curr_state;
-                // Create path by walking up the parent chain
-                while let Some(parent_state) = curr_state_ref.parent_state.as_ref() {
-                    path.push(parent_state.cell);
-                    curr_state_ref = parent_state;
-                }
-                // No need to include the starting positioon
-                path.pop();
-                return path;
-            }
-            for (neighbor_cell, neighbor_filled) in
-                agent.mind_map.get_neighbor_cells_4_way(curr_state.cell)
-            {
-                // Only consider neighbors that are empty and are not explored yet
-                if !neighbor_filled && !closed_cells.contains(&neighbor_cell) {
-                    open_states.push(Rc::new(AStarState::from_g_h_costs(
-                        curr_state.actual_cost + 1, // Cost for every move is 1
-                        self.calc_heuristic_cost(agent, neighbor_cell),
-                        neighbor_cell,
-                        Some(curr_state.clone()),
-                        self.break_tie_mode,
-                    )));
-                }
-            }
-            self.actual_cost_map
-                .set_cell(curr_state.cell, curr_state.actual_cost)
-                .unwrap();
-        }
-        // No path found
-        vec![]
-    }
-    fn map_str(&self, agent: &Agent, prev_agent_pos: Vec2i) -> String {
+    fn cost_map_str(
+        cost_map: &Map<i32>,
+        agent: &Agent,
+        prev_agent_pos: Vec2i,
+        color: (u8, u8, u8),
+    ) -> String {
         let mut str = String::new();
         str += &format!(
             "{}\n",
@@ -900,12 +911,12 @@ impl AgentBehavior for AdaptiveAStarBehavior {
                             "GG".truecolor(240, 227, 46).on_truecolor(230, 137, 39)
                         );
                     } else {
-                        let actual_cost = self.actual_cost_map.get_cell(pos).unwrap();
+                        let cost = cost_map.get_cell(pos).unwrap();
                         // Set cell string
                         let cell_str = {
-                            if actual_cost >= 0 {
-                                if actual_cost <= 99 {
-                                    format!("{: >2}", actual_cost)
+                            if cost >= 0 {
+                                if cost <= 99 {
+                                    format!("{: >2}", cost)
                                 } else {
                                     "..".to_owned()
                                 }
@@ -977,8 +988,8 @@ impl AgentBehavior for AdaptiveAStarBehavior {
                                 get_colored_tile(
                                     cell_str,
                                     pos,
-                                    (214, 43, 43),
-                                    (214, 43, 43),
+                                    color,
+                                    color,
                                     (69, 65, 65),
                                     (0, 0, 0),
                                 )
@@ -995,6 +1006,105 @@ impl AgentBehavior for AdaptiveAStarBehavior {
                 .on_truecolor(125, 125, 125)
         );
         str
+    }
+}
+impl AgentBehavior for AdaptiveAStarBehavior {
+    fn init(&mut self, map_size: Vec2i) {
+        self.actual_cost_map.resize(map_size);
+        self.actual_cost_map.fill(-1);
+        self.h_cost_map.resize(map_size);
+        self.h_cost_map.fill(-1);
+        self.f_cost_map.resize(map_size);
+        self.f_cost_map.fill(-1);
+    }
+    fn pathfind(&mut self, agent: &Agent) -> (VecDeque<Vec2i>, i32) {
+        let mut open_states = BinaryHeap::<Rc<AStarState>>::new();
+        let mut closed_cells = HashSet::<Vec2i>::new();
+
+        self.h_cost_map.fill(-1);
+        self.f_cost_map.fill(-1);
+
+        let mut expanded_cell_count = 0;
+        self.actual_cost_map.set_cell(agent.position, 0).unwrap();
+        open_states.push(Rc::new(AStarState::from_g_h_costs(
+            0,
+            self.calc_heuristic_cost(agent, agent.position),
+            agent.position,
+            None,
+            self.break_tie_mode,
+        )));
+        while let Some(curr_state) = open_states.pop() {
+            expanded_cell_count += 1;
+            if closed_cells.contains(&curr_state.cell) {
+                // There was an earlier path that beat us to the punch.
+                // This state is no longer relevant.
+                continue;
+            }
+            closed_cells.insert(curr_state.cell);
+            if curr_state.cell == agent.goal {
+                // Path has been found
+                let mut path = VecDeque::new();
+                path.push_front(curr_state.cell);
+                let mut curr_state_ref = &curr_state;
+                // Create path by walking up the parent chain
+                while let Some(parent_state) = curr_state_ref.parent_state.as_ref() {
+                    path.push_front(parent_state.cell);
+                    curr_state_ref = parent_state;
+                }
+                // No need to include the starting positioon
+                path.pop_front();
+                return (path, expanded_cell_count);
+            }
+            for (neighbor_cell, neighbor_filled) in
+                agent.mind_map.get_neighbor_cells_4_way(curr_state.cell)
+            {
+                // Only consider neighbors that are empty and are not explored yet
+                if !neighbor_filled && !closed_cells.contains(&neighbor_cell) {
+                    let state = AStarState::from_g_h_costs(
+                        curr_state.actual_cost + 1, // Cost for every move is 1
+                        self.calc_heuristic_cost(agent, neighbor_cell),
+                        neighbor_cell,
+                        Some(curr_state.clone()),
+                        self.break_tie_mode,
+                    );
+                    self.h_cost_map
+                        .set_cell(neighbor_cell, state.heuristic_cost)
+                        .unwrap();
+                    self.f_cost_map
+                        .set_cell(neighbor_cell, state.f_cost())
+                        .unwrap();
+                    open_states.push(Rc::new(state));
+                }
+            }
+            self.actual_cost_map
+                .set_cell(curr_state.cell, curr_state.actual_cost)
+                .unwrap();
+        }
+        // No path found
+        (VecDeque::new(), expanded_cell_count)
+    }
+    fn map_str(&self, agent: &Agent, prev_agent_pos: Vec2i) -> String {
+        let f_cost_str = AdaptiveAStarBehavior::cost_map_str(
+            &self.f_cost_map,
+            agent,
+            prev_agent_pos,
+            (255, 31, 31),
+        );
+        let g_cost_str = AdaptiveAStarBehavior::cost_map_str(
+            &self.actual_cost_map,
+            agent,
+            prev_agent_pos,
+            (255, 147, 31),
+        );
+        let h_cost_str = AdaptiveAStarBehavior::cost_map_str(
+            &self.h_cost_map,
+            agent,
+            prev_agent_pos,
+            (255, 221, 31),
+        );
+        f_cost_str
+            .join_sides_spaced(&g_cost_str)
+            .join_sides_spaced(&h_cost_str)
     }
 }
 // endregion
@@ -1017,7 +1127,7 @@ pub struct Agent {
     pub goal: Vec2i,
     /// Path to target.
     /// Stored in order from goal to target (reverse order), to promote fast popping
-    pub target_path: Vec<Vec2i>,
+    pub target_path: VecDeque<Vec2i>,
     /// Status of the agent.
     /// - Inactive when the agent is first created
     /// - Running after the agent is initialized
@@ -1025,6 +1135,8 @@ pub struct Agent {
     pub status: AgentStatus,
     /// Behavior of the agent
     pub behavior: Mutex<Box<dyn AgentBehavior>>,
+    /// Number of cells expanded by the agent over it's entire lifetime
+    pub expanded_cell_count: i32,
 }
 #[derive(Clone)]
 struct AStarState {
@@ -1065,6 +1177,9 @@ impl AStarState {
             parent_state,
         }
     }
+    pub fn f_cost(&self) -> i32 {
+        self.actual_cost + self.heuristic_cost
+    }
 }
 impl Eq for AStarState {}
 impl PartialEq for AStarState {
@@ -1085,9 +1200,10 @@ impl Ord for AStarState {
 impl Agent {
     pub fn new(start_pos: Vec2i, goal: Vec2i, behavior: Box<dyn AgentBehavior>) -> Agent {
         Agent {
+            expanded_cell_count: 0,
             position: start_pos,
             goal,
-            target_path: Vec::new(),
+            target_path: VecDeque::new(),
             status: AgentStatus::Inactive,
             mind_map: WallMap::new(Vec2i::ONE),
             behavior: Mutex::new(behavior),
@@ -1116,7 +1232,7 @@ impl Agent {
                 self.mind_map
                     .set_cell(neighbor_pos, neighbor_value)
                     .unwrap();
-                if let Some(next_pos) = self.target_path.last() {
+                if let Some(next_pos) = self.target_path.front() {
                     if *next_pos == neighbor_pos && neighbor_value {
                         // If the neighbor is blocked off (true),
                         // and this neighbor is on the next path to the goal
@@ -1128,9 +1244,11 @@ impl Agent {
         }
         if path_needs_update {
             // Only regenerate the path if an update is needed
-            self.target_path = self.behavior.try_lock().unwrap().pathfind(self);
+            let (path, expanded_cell_count) = self.behavior.try_lock().unwrap().pathfind(self);
+            self.expanded_cell_count += expanded_cell_count;
+            self.target_path = path;
         }
-        if let Some(new_pos) = self.target_path.pop() {
+        if let Some(new_pos) = self.target_path.pop_front() {
             // We have a path, so we move towards the path
             self.position = new_pos;
             if new_pos == self.goal {
@@ -1192,17 +1310,13 @@ impl Simulation {
     pub fn simulation_str(&self) -> String {
         let mut str = String::new();
         str += &format!(
-            "Simulation({}, {}) Step {}:\n",
-            self.wall_map.size.x, self.wall_map.size.y, self.steps
+            "Simulation({}, {})\n Step {}\n  Expanded Cells: {} cells\n",
+            self.wall_map.size.x, self.wall_map.size.y, self.steps, self.agent.expanded_cell_count
         );
-        for (line, line_2) in self
+        str += &self
             .agent
             .mind_map_str(self.prev_agent_pos)
-            .lines()
-            .zip(self.full_map_str().lines())
-        {
-            str += &format!("{}     {}\n", line, line_2);
-        }
+            .join_sides_spaced(&self.full_map_str());
         str
     }
     fn get_connected_component_string(&self, pos: Vec2i) -> String {
@@ -1268,6 +1382,64 @@ impl Display for Simulation {
 // region SimulationBuilder
 pub struct SimulationBuilder;
 impl SimulationBuilder {
+    pub fn from_text(mut text: &str, agent_behavior: Box<dyn AgentBehavior>) -> Option<Simulation> {
+        text = text.trim_matches('\n');
+        let lines: Vec<&str> = text.lines().collect();
+        let y = lines.len();
+        let last = lines.last();
+        if last.is_none() {
+            println!("last is none");
+            return None;
+        }
+        println!("last: \"{}\"", last.unwrap());
+        let x = last.unwrap().chars().count();
+        let size = Vec2i::new(x as i32, y as i32);
+
+        let mut map: WallMap = WallMap::new(size);
+        let mut goal_pos: Option<Vec2i> = None;
+        let mut agent_pos: Option<Vec2i> = None;
+
+        println!("size: {}", size);
+        let mut y = 0;
+        for line in lines {
+            if y >= size.y {
+                println!("y > size.y");
+                return None;
+            }
+            let mut x = 0;
+            for char in line.chars() {
+                println!("next {}", char);
+                if x >= size.x {
+                    println!("x > size.x");
+                    return None;
+                }
+                let pos = Vec2i::new(x, y);
+                println!("{}: {}", pos, char);
+                if char == '#' {
+                    map.set_cell(pos, true).unwrap();
+                } else if char == 'G' {
+                    if goal_pos.is_some() {
+                        return None;
+                    }
+                    goal_pos = Some(pos);
+                } else if char == 'A' {
+                    if agent_pos.is_some() {
+                        return None;
+                    }
+                    agent_pos = Some(pos);
+                }
+                x += 1;
+            }
+            y += 1;
+        }
+
+        if goal_pos.is_none() || agent_pos.is_none() {
+            println!("no goal, or no agent");
+            return None;
+        }
+        let agent = Agent::new(agent_pos.unwrap(), goal_pos.unwrap(), agent_behavior);
+        Some(Simulation::new(map, agent))
+    }
     pub fn from_map(
         rng_seed: u64,
         map: WallMap,
@@ -1313,14 +1485,14 @@ impl SimulationRunner {
             return self.run_instant();
         }
 
-        if self.print {
+        if self.print && self.interval > 0.0 {
             clearscreen::clear().unwrap();
             println!("🚀 Simulation Start");
             println!("{}", self.simulation);
         }
         while self.simulation.is_running() {
             self.simulation.step();
-            if self.print {
+            if self.print && self.interval > 0.0 {
                 clearscreen::clear().unwrap();
                 println!("{}", self.simulation);
             }
@@ -1333,7 +1505,10 @@ impl SimulationRunner {
             clearscreen::clear().unwrap();
             self.simulation.step();
             println!("{}", self.simulation);
-            println!("🛑 Simulation End. Goal Reached? {}", result);
+            println!(
+                "🛑 Simulation End.\n  Goal Reached? {}\n  Expanded Cells: {} cells",
+                result, self.simulation.agent.expanded_cell_count
+            );
         }
         result
     }

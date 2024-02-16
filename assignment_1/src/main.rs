@@ -2,9 +2,9 @@
 use owo_colors::OwoColorize;
 use rand::{rngs::SmallRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use std::{
-    collections::{BinaryHeap, HashSet},
+    collections::{BinaryHeap, HashSet, VecDeque},
     env,
-    fmt::{format, Debug, Display},
+    fmt::{Debug, Display},
     hash::Hash,
     ops,
     rc::Rc,
@@ -55,17 +55,39 @@ fn auto_tests(mut args: Vec<String>) {
         }
     }
 
-    let trials = 50;
-    let mut builder = MazeBuilder::new(rng_seed, Vec2i::new(51, 51));
+    let mut trials = 50;
+    if let Some(trials_str) = args.pop() {
+        if let Ok(trials_val) = trials_str.parse() {
+            trials = trials_val;
+        }
+    }
+
+    let mut map_size = Vec2i::new(51, 51);
+    if let Some(x_str) = args.pop() {
+        if let Ok(x) = x_str.parse() {
+            if let Some(y_str) = args.pop() {
+                if let Ok(y) = y_str.parse() {
+                    map_size = Vec2i::new(x, y);
+                }
+            }
+        }
+    }
+
+    let mut map_type = MapType::DFSRand;
+    if let Some(map_type_str) = args.pop() {
+        map_type = parse_map_type(map_type_str);
+    }
+
+    let mut map_gen = MazeBuilder::new(rng_seed, map_size);
     let mut maps = Vec::new();
     for _ in 0..trials {
-        let map = builder.generate_dfs_map_default();
+        let map = map_type.generate_map(&mut map_gen);
         maps.push(map);
     }
 
     println!(
-        "🤖 Auto Tests\nDFS Map, Trials: {}, RNG Seed: {}",
-        trials, rng_seed
+        "🤖 Auto Tests\nDFS Map, Trials: {}, Map Size: {}, RNG Seed: {}",
+        trials, map_size, rng_seed
     );
 
     auto_test_behavior(
@@ -156,17 +178,9 @@ fn manual_test(mut args: Vec<String>) {
         }
     }
 
-    pub enum MapType {
-        DFS,
-        DFSRand,
-    }
     let mut map_type = MapType::DFSRand;
     if let Some(map_type_str) = args.pop() {
-        if map_type_str.to_lowercase() == "dfs" {
-            map_type = MapType::DFS;
-        } else if map_type_str.to_lowercase() == "dfs-rand" {
-            map_type = MapType::DFSRand;
-        }
+        map_type = parse_map_type(map_type_str);
     }
 
     let mut reachable_goal = false;
@@ -211,10 +225,7 @@ fn manual_test(mut args: Vec<String>) {
     }
 
     let mut map_gen = MazeBuilder::new(rng_seed, size);
-    let rand_map = match map_type {
-        MapType::DFS => map_gen.generate_dfs_map_default(),
-        MapType::DFSRand => map_gen.generate_dfs_map_random_default(),
-    };
+    let rand_map = map_type.generate_map(&mut map_gen);
     let simulation =
         SimulationBuilder::from_map(rng_seed, rand_map.clone(), reachable_goal, ai_behavior);
     if let Some(simulation) = simulation {
@@ -223,6 +234,64 @@ fn manual_test(mut args: Vec<String>) {
     } else {
         println!("⛔ All map cells are connected, cannot set unreachable goal.");
         println!("{}", rand_map);
+    }
+}
+
+pub enum MapType {
+    DFS,
+    DFSRand,
+    Rand1,
+    Rand2,
+    Rand3,
+    Rand4,
+    Rand5,
+    Rand6,
+    Rand7,
+    Rand8,
+    Rand9,
+}
+impl MapType {
+    pub fn generate_map(&self, map_gen: &mut MazeBuilder) -> WallMap {
+        match self {
+            MapType::DFS => map_gen.generate_dfs_map_default(),
+            MapType::DFSRand => map_gen.generate_dfs_map_random_default(),
+            MapType::Rand1 => map_gen.generate_random(0.1),
+            MapType::Rand2 => map_gen.generate_random(0.2),
+            MapType::Rand3 => map_gen.generate_random(0.3),
+            MapType::Rand4 => map_gen.generate_random(0.4),
+            MapType::Rand5 => map_gen.generate_random(0.5),
+            MapType::Rand6 => map_gen.generate_random(0.7),
+            MapType::Rand7 => map_gen.generate_random(0.7),
+            MapType::Rand8 => map_gen.generate_random(0.8),
+            MapType::Rand9 => map_gen.generate_random(0.9),
+        }
+    }
+}
+fn parse_map_type(map_type_str: String) -> MapType {
+    if map_type_str.to_lowercase() == "dfs" {
+        MapType::DFS
+    } else if map_type_str.to_lowercase() == "dfs-rand" {
+        MapType::DFSRand
+    } else if map_type_str.to_lowercase() == "rand-1" {
+        MapType::Rand1
+    } else if map_type_str.to_lowercase() == "rand-2" {
+        MapType::Rand2
+    } else if map_type_str.to_lowercase() == "rand-3" {
+        MapType::Rand3
+    } else if map_type_str.to_lowercase() == "rand-4" {
+        MapType::Rand4
+    } else if map_type_str.to_lowercase() == "rand-5" {
+        MapType::Rand5
+    } else if map_type_str.to_lowercase() == "rand-6" {
+        MapType::Rand6
+    } else if map_type_str.to_lowercase() == "rand-7" {
+        MapType::Rand7
+    } else if map_type_str.to_lowercase() == "rand-8" {
+        MapType::Rand8
+    } else if map_type_str.to_lowercase() == "rand-9" {
+        MapType::Rand9
+    } else {
+        MapType::DFSRand
     }
 }
 
@@ -311,36 +380,39 @@ impl WallMap {
         }
     }
     pub fn dfs_visit(&self, pos: Vec2i, visited: &mut HashSet<Vec2i>) {
-        visited.insert(pos);
-        for (neighbor, neighbor_filled) in self.get_neighbor_cells_4_way(pos) {
-            if !neighbor_filled && !visited.contains(&neighbor) {
-                self.dfs_visit(neighbor, visited);
-            }
+        if visited.contains(&pos) {
+            return;
         }
-    }
-
-    pub fn find_longest_reachable_goal(&self, pos: Vec2i) -> Vec2i {
-        self.find_longest_reachable_goal_dfs(pos, &mut HashSet::<Vec2i>::new(), 0)
-            .0
-    }
-    fn find_longest_reachable_goal_dfs(
-        &self,
-        pos: Vec2i,
-        visited: &mut HashSet<Vec2i>,
-        path_length: i32,
-    ) -> (Vec2i, i32) {
+        let mut frontier_queue = VecDeque::<Vec2i>::new();
+        frontier_queue.push_back(pos);
         visited.insert(pos);
-        let mut longest_path = None;
-        for (neighbor, neighbor_filled) in self.get_neighbor_cells_4_way(pos) {
-            if !neighbor_filled && !visited.contains(&neighbor) {
-                let path = self.find_longest_reachable_goal_dfs(neighbor, visited, path_length + 1);
-                if path.1 > longest_path.get_or_insert(path).1 {
-                    longest_path = Some(path);
+        while let Some(pos) = frontier_queue.pop_front() {
+            for (neighbor, neighbor_filled) in self.get_neighbor_cells_4_way(pos) {
+                if !neighbor_filled && !visited.contains(&neighbor) {
+                    visited.insert(pos);
+                    frontier_queue.push_back(neighbor);
                 }
             }
         }
-        // Return the longest path, or the path we have so far up to this point
-        longest_path.unwrap_or((pos, path_length))
+    }
+    pub fn find_longest_reachable_goal(&self, pos: Vec2i) -> Vec2i {
+        let mut frontier_queue = VecDeque::<(Vec2i, i32)>::new();
+        frontier_queue.push_back((pos, 0));
+        let mut visited = HashSet::<Vec2i>::new();
+        visited.insert(pos);
+        let mut longest_path = None;
+        while let Some((pos, path_length)) = frontier_queue.pop_front() {
+            if path_length > longest_path.get_or_insert((pos, path_length)).1 {
+                longest_path = Some((pos, path_length));
+            }
+            for (neighbor, neighbor_filled) in self.get_neighbor_cells_4_way(pos) {
+                if !neighbor_filled && !visited.contains(&neighbor) {
+                    visited.insert(neighbor);
+                    frontier_queue.push_back((neighbor, path_length + 1))
+                }
+            }
+        }
+        longest_path.unwrap().0
     }
 }
 impl Display for WallMap {
@@ -388,11 +460,19 @@ impl ConnectedComponentsMap {
         visited: &mut HashSet<Vec2i>,
         component_id: u32,
     ) {
+        if visited.contains(&pos) {
+            return;
+        }
+        let mut frontier_queue = VecDeque::<Vec2i>::new();
+        frontier_queue.push_back(pos);
         visited.insert(pos);
         self.set_cell(pos, component_id).unwrap();
-        for (neighbor, neighbor_filled) in wall_map.get_neighbor_cells_4_way(pos) {
-            if !neighbor_filled && !visited.contains(&neighbor) {
-                self.wall_map_dfs_visit(wall_map, neighbor, visited, component_id);
+        while let Some(pos) = frontier_queue.pop_front() {
+            for (neighbor, neighbor_filled) in wall_map.get_neighbor_cells_4_way(pos) {
+                if !neighbor_filled && !visited.contains(&neighbor) {
+                    visited.insert(neighbor);
+                    frontier_queue.push_back(neighbor);
+                }
             }
         }
     }
@@ -489,6 +569,7 @@ impl MazeBuilder {
                     .unwrap();
             }
         }
+        maze.set_cell(Vec2i::ZERO, false).unwrap();
         maze
     }
     /// Get the starting (top left most) cell that
@@ -779,21 +860,18 @@ impl AgentBehavior for AdaptiveAStarBehavior {
             {
                 // Only consider neighbors that are empty and are not explored yet
                 if !neighbor_filled && !closed_cells.contains(&neighbor_cell) {
-                    // TODO NOW: Fix this
-                    let actual_cost = curr_state.actual_cost + 1;
-                    let heuristic = self.calc_heuristic_cost(agent, neighbor_cell);
-                    self.actual_cost_map
-                        .set_cell(neighbor_cell, actual_cost)
-                        .unwrap();
                     open_states.push(Rc::new(AStarState::from_g_h_costs(
-                        actual_cost, // Cost for every move is 1
-                        heuristic,
+                        curr_state.actual_cost + 1, // Cost for every move is 1
+                        self.calc_heuristic_cost(agent, neighbor_cell),
                         neighbor_cell,
                         Some(curr_state.clone()),
                         self.break_tie_mode,
                     )));
                 }
             }
+            self.actual_cost_map
+                .set_cell(curr_state.cell, curr_state.actual_cost)
+                .unwrap();
         }
         // No path found
         vec![]

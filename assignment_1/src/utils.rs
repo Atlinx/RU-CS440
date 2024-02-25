@@ -13,7 +13,7 @@ impl Vec2i {
     pub const DOWN: Vec2i = Vec2i { x: 0, y: -1 };
     pub const LEFT: Vec2i = Vec2i { x: -1, y: 0 };
     pub const RIGHT: Vec2i = Vec2i { x: 1, y: 0 };
-    pub const DIRECTIONS_4_WAY: [Vec2i; 4] = [Vec2i::UP, Vec2i::LEFT, Vec2i::DOWN, Vec2i::RIGHT];
+    pub const DIRECTIONS_4_WAY: [Vec2i; 4] = [Vec2i::LEFT, Vec2i::DOWN, Vec2i::RIGHT, Vec2i::UP];
 
     pub fn new(x: i32, y: i32) -> Vec2i {
         Vec2i { x, y }

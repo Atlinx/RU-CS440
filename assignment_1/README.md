@@ -41,6 +41,7 @@ A grid-world simulation for Assignment 1.
       - `rand-#` -> Generates a map using random placement. `#` specifies the wall density, and can be an integer from `1-9`
         - Wall density of `1` (`rand-1`) means there's a 10% chance of any tile having a wall
         - Wall density of `9` (`rand-9`) means there's a 90% chance of any tile having a wall
+  - heap -> Runs some tests for the custom implementation of a binary heap
 
 ## Examples
 
@@ -54,6 +55,16 @@ cargo run manual 1234 25 25 1 dfs reachable high-g forward adaptive-astar
 ```
 Run a manual test with seed `1234` on a map of size `25x25`. Step the simulation every `1` seconds. Run DFS to generate a maze map, and set a reachable goal. Use the highest cost tie-breaking strategy for A*, and use adaptive A*.
 
+```bash
+cargo run auto
+```
+Automatically runs some simulation tests and displays aggregate data.
+
+```bash
+cargo run heap
+```
+Runs some tests for the custom implementation of a binary heap
+
 ## Problems
 
 - Forward A* beats Adaptive A*
@@ -63,6 +74,3 @@ Run a manual test with seed `1234` on a map of size `25x25`. Step the simulation
   - `cargo run manual 43434 11 11 0.1 dfs reachable high-g forward`
     - `adaptive-astar` -> 334 
     - `astar` -> 328
-
-```bash
-cargo

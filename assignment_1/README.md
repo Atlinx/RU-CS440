@@ -53,3 +53,16 @@ Run a manual test with seed `1234` on a map of size `51x51`. Step the simulation
 cargo run manual 1234 25 25 1 dfs reachable high-g forward adaptive-astar
 ```
 Run a manual test with seed `1234` on a map of size `25x25`. Step the simulation every `1` seconds. Run DFS to generate a maze map, and set a reachable goal. Use the highest cost tie-breaking strategy for A*, and use adaptive A*.
+
+## Problems
+
+- Forward A* beats Adaptive A*
+  - `cargo run manual 43434 25 25 0.1 dfs reachable high-g forward`
+    - `adaptive-astar` -> 9232 cells
+    - `astar` -> 5182 cells
+  - `cargo run manual 43434 11 11 0.1 dfs reachable high-g forward`
+    - `adaptive-astar` -> 334 
+    - `astar` -> 328
+
+```bash
+cargo

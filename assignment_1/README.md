@@ -42,6 +42,10 @@ A grid-world simulation for Assignment 1.
         - Wall density of `1` (`rand-1`) means there's a 10% chance of any tile having a wall
         - Wall density of `9` (`rand-9`) means there's a 90% chance of any tile having a wall
   - heap -> Runs some tests for the custom implementation of a binary heap
+  - adaptive -> Runs the Adaptive A* or regular A* on the sample gridworld in the Assignment 1 writeup
+    - mode `enum`
+      - `adaptive` -> Uses Adaptive A*
+      - `astar` -> Uses regular A*
 
 ## Examples
 

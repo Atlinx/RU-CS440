@@ -46,7 +46,7 @@ fn main() {
     }
 
     match mode {
-        Mode::AdaptiveExample => test_adaptive_example(),
+        Mode::AdaptiveExample => test_adaptive_example(args),
         Mode::HeapTests => heap::heap_tests(args),
         Mode::AutoTests => auto_tests(args),
         Mode::ManualTest => manual_test(args),
@@ -54,7 +54,7 @@ fn main() {
 }
 
 // region Testing
-fn test_adaptive_example() {
+fn test_adaptive_example(mut args: Vec<String>) {
     let simulation_text = "
 _____
 _____
@@ -62,18 +62,37 @@ __#__
 __#__
 __A#G
 ";
+    let mut is_adaptive = false;
+    if let Some(map_type_str) = args.pop() {
+        is_adaptive = map_type_str == "adaptive";
+    }
 
-    if let Some(simulation) = SimulationBuilder::from_text(
-        simulation_text,
-        Box::new(AdaptiveAStarBehavior::new(BreakTieMode::HigherGCost, true)),
-    ) {
-        let mut runner = SimulationRunner::new(simulation, 0.5, true);
-        runner.run();
+    if is_adaptive {
+        if let Some(simulation) = SimulationBuilder::from_text(
+            simulation_text,
+            Box::new(AdaptiveAStarBehavior::new(BreakTieMode::HigherGCost, true)),
+        ) {
+            let mut runner = SimulationRunner::new(simulation, 0.5, true);
+            runner.run();
+        } else {
+            println!(
+                "⛔ Could not load simulation from text:\n{}",
+                simulation_text
+            );
+        }
     } else {
-        println!(
-            "⛔ Could not load simulation from text:\n{}",
-            simulation_text
-        );
+        if let Some(simulation) = SimulationBuilder::from_text(
+            simulation_text,
+            Box::new(AStarBehavior::new(true, BreakTieMode::HigherGCost)),
+        ) {
+            let mut runner = SimulationRunner::new(simulation, 0.5, true);
+            runner.run();
+        } else {
+            println!(
+                "⛔ Could not load simulation from text:\n{}",
+                simulation_text
+            );
+        }
     }
 }
 

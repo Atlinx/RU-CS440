@@ -1,5 +1,6 @@
-use std::{env, fs::File, io::Read};
+use std::{env, error::Error, fs::File, io::Read, iter::zip};
 
+type Label = i32;
 type RawData = Vec2D<f32>;
 type Features = Vec2D<f32>;
 struct TrainingData {
@@ -33,6 +34,25 @@ impl<T: Default + Clone> Vec2D<T> {
     }
 }
 
+struct LabelParser {}
+
+impl LabelParser {
+    fn new() -> Self {
+        LabelParser {}
+    }
+
+    fn parse_file(&self, file_path: &str) -> Result<Vec<i32>, Box<dyn Error>> {
+        let mut file = File::open(file_path)?;
+        let mut buffer = String::new();
+        file.read_to_string(&mut buffer)?;
+        let mut labels = Vec::new();
+        for label in buffer.split_whitespace() {
+            labels.push(label.parse::<i32>()?)
+        }
+        Ok(labels)
+    }
+}
+
 struct DataParser {
     width: usize,
     height: usize,
@@ -56,7 +76,7 @@ impl DataParser {
             value_char_range,
         }
     }
-    fn parse_file(&self, file_path: String) -> Result<Vec<RawData>, std::io::Error> {
+    fn parse_file(&self, file_path: &str) -> Result<Vec<RawData>, std::io::Error> {
         let mut file = File::open(file_path)?;
         let mut buffer = String::new();
         file.read_to_string(&mut buffer)?;
@@ -91,6 +111,49 @@ impl DataParser {
     }
 }
 
+struct LabelDataParser {
+    pub data_parser: DataParser,
+    pub label_parser: LabelParser,
+}
+
+#[derive(Debug)]
+enum LabelDataParserError {
+    DataParserError(std::io::Error),
+    LabelParserError(Box<dyn Error>),
+    MismatchedSize(usize, usize),
+}
+
+impl LabelDataParser {
+    fn new(data_parser: DataParser, label_parser: LabelParser) -> Self {
+        LabelDataParser {
+            data_parser,
+            label_parser,
+        }
+    }
+
+    fn parse_files(
+        &self,
+        data_file_path: &str,
+        label_file_path: &str,
+    ) -> Result<Vec<(RawData, Label)>, LabelDataParserError> {
+        let raw_data = self
+            .data_parser
+            .parse_file(data_file_path)
+            .map_err(|e| LabelDataParserError::DataParserError(e))?;
+        let labels = self
+            .label_parser
+            .parse_file(label_file_path)
+            .map_err(|e| LabelDataParserError::LabelParserError(e))?;
+        if raw_data.len() != labels.len() {
+            return Err(LabelDataParserError::MismatchedSize(
+                raw_data.len(),
+                labels.len(),
+            ));
+        }
+        Ok(zip(raw_data, labels).collect())
+    }
+}
+
 trait FeatureExtractor {
     fn extract_features(data: RawData) -> Features;
 }
@@ -113,32 +176,30 @@ fn main() {
 }
 
 fn train_digits(args: &[String]) {
-    let mut width: usize = 28;
-    if let Some(value) = args.get(1) {
-        width = value.parse().expect("Expected width to be of usize.");
+    let width: usize = 28;
+    let height = 28;
+    if let Some(data_set) = args.get(1) {
+        if data_set == "test" {}
     }
-    let mut height = 70;
-    if let Some(value) = args.get(2) {
-        height = value.parse().expect("Expected height to be of usize.");
-    }
-    let mut file_path = "data/digitdata/trainingimages".to_owned();
-    if let Some(value) = args.get(3) {
-        file_path = value.to_owned();
-    }
-    let mut split_chars = DataParser::NEW_LINE_CHARS.to_vec();
-    if let Some(value) = args.get(4) {
-        split_chars = value.chars().collect();
-    }
-    let mut char_range = vec![' ', '+', '#'];
-    if let Some(value) = args.get(5) {
-        char_range = value.chars().collect();
-    }
-    let parser = DataParser::new(width, height, split_chars, char_range);
-    let raw_data = parser
-        .parse_file(file_path)
-        .expect("Expect file to be parsable.");
+    let split_chars = DataParser::NEW_LINE_CHARS.to_vec();
+    let char_range = vec![' ', '+', '#'];
+    let label_data_parser = LabelDataParser::new(
+        DataParser::new(width, height, split_chars, char_range),
+        LabelParser::new(),
+    );
+    let labelled_training_data = label_data_parser
+        .parse_files(
+            "data/digitdata/trainingimages",
+            "data/digitdata/traininglabels",
+        )
+        .expect("Expect label and data files to be parsable");
+    let labelled_test_data = label_data_parser
+        .parse_files("data/digitdata/testimages", "data/digitdata/testlabels")
+        .expect("Expect label and data files to be parsable");
+    println!("1️⃣  Training digits");
+    println!("   Training set size: {}", labelled_training_data.len());
+    println!("   Test set size: {}", labelled_test_data.len());
+    for (raw_data, label) in labelled_training_data {}
 }
 
-fn train_faces(args: &[String]) {
-    // TODO
-}
+fn train_faces(args: &[String]) {}

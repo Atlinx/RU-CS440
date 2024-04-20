@@ -1,8 +1,15 @@
-use std::{env, error::Error, fs::File, io::Read, iter::zip};
+use std::{env, error::Error, fs::File, io::Read, iter::zip, os::raw};
+
+use ndarray::{prelude::*, ShapeError};
+use ndarray_rand::{
+    rand::{rngs::StdRng, SeedableRng},
+    rand_distr::Uniform,
+    RandomExt,
+};
 
 type Label = i32;
 type RawData = Vec2D<f32>;
-type Features = Vec2D<f32>;
+type Features = ArrayD<f32>;
 struct TrainingData {
     features: Features,
     label: u8,
@@ -111,22 +118,29 @@ impl DataParser {
     }
 }
 
-struct LabelDataParser {
+struct LabelDataFeatureParser {
     pub data_parser: DataParser,
+    pub feature_extractor: Box<dyn FeatureExtractor>,
     pub label_parser: LabelParser,
 }
 
 #[derive(Debug)]
-enum LabelDataParserError {
+enum LabelDataFeatureParserError {
     DataParserError(std::io::Error),
     LabelParserError(Box<dyn Error>),
+    FeatureExtractorError(ShapeError),
     MismatchedSize(usize, usize),
 }
 
-impl LabelDataParser {
-    fn new(data_parser: DataParser, label_parser: LabelParser) -> Self {
-        LabelDataParser {
+impl LabelDataFeatureParser {
+    fn new<T: FeatureExtractor + 'static>(
+        data_parser: DataParser,
+        feature_extractor: T,
+        label_parser: LabelParser,
+    ) -> Self {
+        LabelDataFeatureParser {
             data_parser,
+            feature_extractor: Box::new(feature_extractor),
             label_parser,
         }
     }
@@ -135,27 +149,45 @@ impl LabelDataParser {
         &self,
         data_file_path: &str,
         label_file_path: &str,
-    ) -> Result<Vec<(RawData, Label)>, LabelDataParserError> {
+    ) -> Result<Vec<(Features, Label)>, LabelDataFeatureParserError> {
         let raw_data = self
             .data_parser
             .parse_file(data_file_path)
-            .map_err(|e| LabelDataParserError::DataParserError(e))?;
+            .map_err(|e| LabelDataFeatureParserError::DataParserError(e))?;
         let labels = self
             .label_parser
             .parse_file(label_file_path)
-            .map_err(|e| LabelDataParserError::LabelParserError(e))?;
+            .map_err(|e| LabelDataFeatureParserError::LabelParserError(e))?;
         if raw_data.len() != labels.len() {
-            return Err(LabelDataParserError::MismatchedSize(
+            return Err(LabelDataFeatureParserError::MismatchedSize(
                 raw_data.len(),
                 labels.len(),
             ));
         }
-        Ok(zip(raw_data, labels).collect())
+        let mut features_list = Vec::new();
+        for data in raw_data {
+            let features = self
+                .feature_extractor
+                .extract_features(data)
+                .map_err(|e| LabelDataFeatureParserError::FeatureExtractorError(e))?;
+            features_list.push(features);
+        }
+        Ok(zip(features_list, labels).collect())
     }
 }
 
 trait FeatureExtractor {
-    fn extract_features(data: RawData) -> Features;
+    fn extract_features(&self, data: RawData) -> Result<Features, ShapeError>;
+}
+
+struct PixelFeatureExtractor;
+impl FeatureExtractor for PixelFeatureExtractor {
+    fn extract_features(&self, data: RawData) -> Result<Features, ShapeError> {
+        Ok(ArrayD::from_shape_vec(
+            IxDyn(&[data.width, data.height]),
+            data.array,
+        )?)
+    }
 }
 
 fn main() {
@@ -181,10 +213,29 @@ fn train_digits(args: &[String]) {
     if let Some(data_set) = args.get(1) {
         if data_set == "test" {}
     }
+    let mut seed: u64 = 1234;
+    if let Some(value) = args.get(2) {
+        if let Ok(value) = value.parse::<u64>() {
+            seed = value;
+        }
+    }
+    let mut epochs: usize = 3;
+    if let Some(value) = args.get(3) {
+        if let Ok(value) = value.parse::<usize>() {
+            epochs = value;
+        }
+    }
+    let mut learn_rate: f32 = 0.01;
+    if let Some(value) = args.get(4) {
+        if let Ok(value) = value.parse::<f32>() {
+            learn_rate = value;
+        }
+    }
     let split_chars = DataParser::NEW_LINE_CHARS.to_vec();
     let char_range = vec![' ', '+', '#'];
-    let label_data_parser = LabelDataParser::new(
+    let label_data_parser = LabelDataFeatureParser::new(
         DataParser::new(width, height, split_chars, char_range),
+        PixelFeatureExtractor,
         LabelParser::new(),
     );
     let labelled_training_data = label_data_parser
@@ -199,7 +250,26 @@ fn train_digits(args: &[String]) {
     println!("1️⃣  Training digits");
     println!("   Training set size: {}", labelled_training_data.len());
     println!("   Test set size: {}", labelled_test_data.len());
-    for (raw_data, label) in labelled_training_data {}
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    // Neural Network Structure:
+    //
+    // Input (width * height) -> Hidden (20) -> Output (10 digits)
+
+    // Weights for input to hidden layer
+    let w_i_h = Array::random_using((20, width * height), Uniform::new(-0.5, 0.5), &mut rng);
+    let b_i_h = Array::<f64, _>::zeros((20, 1));
+
+    // Weights for hidden layer to output layer
+    let w_h_o = Array::random_using((10, 20), Uniform::new(-0.5, 0.5), &mut rng);
+    let b_i_o = Array::<f64, _>::zeros((10, 1));
+
+    let mut number_correct: usize = 0;
+    for epoch in 0..epochs {
+        for (features, label) in labelled_training_data.iter() {
+            // TODO
+        }
+    }
 }
 
 fn train_faces(args: &[String]) {}

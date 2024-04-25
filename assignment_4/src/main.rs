@@ -3,12 +3,14 @@ use std::{
     error::Error,
     fs::File,
     io::{stdin, Read},
+    vec,
 };
 
+use ndarray::parallel::prelude::*;
 use ndarray::prelude::*;
 use ndarray_rand::{
-    rand::{rngs::StdRng, SeedableRng},
-    rand_distr::{num_traits::ToPrimitive, Uniform},
+    rand::{rngs::StdRng, Rng, SeedableRng},
+    rand_distr::Uniform,
     RandomExt,
 };
 
@@ -19,6 +21,7 @@ type LabelVec = Array2<f64>;
 type FeaturesVec = Array2<f64>;
 type LabelFeatureDataSet = Vec<(RawData, Features, Label)>;
 type LabelFeatureVecDataSet = Vec<(RawData, FeaturesVec, LabelVec)>;
+type LabelFeatureVecDataSetSlice = [(RawData, FeaturesVec, LabelVec)];
 
 #[derive(Debug, Clone)]
 struct Vec2D<T: Default + Clone> {
@@ -235,6 +238,174 @@ impl FeatureExtractor for PixelFeatureExtractor {
     }
 }
 
+struct NeuralNetwork {
+    weights: Vec<Array2<f64>>,
+    biases: Vec<Array2<f64>>,
+    layers: Vec<usize>,
+    activation_func: Box<dyn Fn(f64) -> f64 + Sync + Send>,
+    activation_func_deriv: Box<dyn Fn(f64) -> f64 + Sync + Send>,
+    learn_rate_func: Box<dyn Fn(f64) -> f64 + Sync + Send>,
+    learn_rate: f64,
+}
+
+impl NeuralNetwork {
+    fn from_structure<
+        R: Rng,
+        F: Fn(f64) -> f64 + 'static + Sync + Send,
+        FD: Fn(f64) -> f64 + 'static + Sync + Send,
+        FL: Fn(f64) -> f64 + 'static + Sync + Send,
+    >(
+        mut rng: &mut R,
+        layers: &[usize],
+        activation_func: F,
+        activation_func_deriv: FD,
+        learn_rate_func: FL,
+    ) -> Self {
+        let mut weights = Vec::new();
+        let mut biases = Vec::new();
+        for i in 0..(layers.len() - 1) {
+            let weight = Array2::<f64>::random_using(
+                (layers[i + 1], layers[i]),
+                Uniform::new(-0.5, 0.5),
+                &mut rng,
+            );
+            let bias = Array2::<f64>::zeros((layers[i + 1], 1));
+            weights.push(weight);
+            biases.push(bias);
+        }
+        NeuralNetwork {
+            weights,
+            biases,
+            layers: layers.iter().copied().collect(),
+            activation_func: Box::new(activation_func),
+            activation_func_deriv: Box::new(activation_func_deriv),
+            learn_rate: learn_rate_func(0.0),
+            learn_rate_func: Box::new(learn_rate_func),
+        }
+    }
+
+    // Returns number of layers in the network
+    fn layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    // Returns number of nodes in the network
+    fn nodes(&self) -> usize {
+        let mut total = 0;
+        for nodes in self.layers.iter() {
+            total += nodes;
+        }
+        total
+    }
+
+    // Trains the neural network on an entire data set
+    fn train_data_set(
+        &mut self,
+        data_set: &LabelFeatureVecDataSetSlice,
+        epochs: usize,
+        print: bool,
+    ) {
+        if print {
+            println!(
+                "✏️  Start training on dataset (size: {}, epochs: {})",
+                data_set.len(),
+                epochs
+            )
+        }
+        for epoch in 0..epochs {
+            let mut number_correct: usize = 0;
+            self.learn_rate = (self.learn_rate_func)(epoch as f64);
+            for (_, features, label) in data_set {
+                let correct = self.train_data_point(features, label);
+                if correct {
+                    number_correct += 1;
+                }
+            }
+            if print {
+                println!(
+                    "   📆 Epoch {}: Accuracy: {:.2}% Learn rate: {}",
+                    epoch,
+                    (number_correct as f64 / data_set.len() as f64 * 100.0).round(),
+                    self.learn_rate
+                )
+            }
+        }
+        if print {
+            println!("🏁 Finished training")
+        }
+    }
+
+    // Trains the neural network on a single data point.
+    // Returns the whether the neural network correctly predicted
+    // the data point or not.
+    fn train_data_point(&mut self, features: &FeaturesVec, label: &LabelVec) -> bool {
+        // Forward propagation
+        let mut a = features.clone();
+        let mut layer_values = vec![a.clone()];
+        for i in 0..self.weights.len() {
+            let bias = &self.biases[i];
+            let weights = &self.weights[i];
+            a = bias + weights.dot(&a);
+            a.mapv_inplace(&self.activation_func);
+            layer_values.push(a.clone());
+        }
+
+        let output = layer_values.last().expect("Expect last value to exist");
+        let correct = label_certainty_from_vec(output).0 == label_certainty_from_vec(label).0;
+        // Back propagation
+        let mut delta = output - label;
+        for i in (0..self.weights.len()).rev() {
+            let res = self.learn_rate * &delta.dot(&layer_values[i].t());
+            self.weights[i] = &self.weights[i] - res;
+            self.biases[i] = &self.biases[i] - self.learn_rate * &delta;
+            layer_values[i].mapv_inplace(&self.activation_func_deriv);
+            delta = (self.weights[i].t().dot(&delta)) * &layer_values[i];
+        }
+
+        correct
+    }
+
+    // Tests the neural network on a data point.
+    // Returns the a tuple containing the prediction label and certainty of the prediction.
+    fn test_data_point(&self, features: &FeaturesVec) -> (usize, f64) {
+        let mut a = features.clone();
+        for i in 0..self.weights.len() {
+            let bias = &self.biases[i];
+            let weights = &self.weights[i];
+            let a_pre = bias + weights.dot(&a);
+            a = a_pre.mapv_into(&self.activation_func);
+        }
+        label_certainty_from_vec(&a)
+    }
+
+    // Returns the accuracy of the neural network accross an entire data set.
+    fn test_accuracy(&self, data_set: &LabelFeatureVecDataSetSlice) -> f64 {
+        let mut number_correct: usize = 0;
+        for (_, features, label) in data_set {
+            let (predicted_label_index, _) = self.test_data_point(features);
+            let correct = predicted_label_index == label_certainty_from_vec(label).0;
+            if correct {
+                number_correct += 1;
+            }
+        }
+        number_correct as f64 / data_set.len() as f64
+    }
+}
+
+fn label_certainty_from_vec(array: &Array2<f64>) -> (usize, f64) {
+    let mut max = 0.0;
+    let mut max_index = 0;
+    let mut index = 0;
+    for elem in array {
+        if *elem > max {
+            max = *elem;
+            max_index = index;
+        }
+        index += 1;
+    }
+    return (max_index, max);
+}
+
 fn main() {
     env::set_var("RUST_BACKTRACE", "1");
     let mut args: Vec<String> = env::args().collect();
@@ -255,14 +426,24 @@ fn main() {
 fn train_digits(args: &[String]) {
     let width: usize = 28;
     let height = 28;
-    if let Some(data_set) = args.get(1) {
-        if data_set == "test" {}
-    }
     let mut seed: u64 = 1234;
-    if let Some(value) = args.get(2) {
+    if let Some(value) = args.get(0) {
         if let Ok(value) = value.parse::<u64>() {
             seed = value;
         }
+    }
+    let mut training_data_percent: f64 = 1.0;
+    if let Some(value) = args.get(1) {
+        if let Ok(value) = value.parse::<f64>() {
+            training_data_percent = value / 100.0;
+        }
+    }
+    let mut intermediate_layers = vec![20];
+    if let Some(value) = args.get(2) {
+        intermediate_layers = value
+            .split(" ")
+            .filter_map(|x| x.parse::<usize>().ok())
+            .collect();
     }
     let mut epochs: usize = 3;
     if let Some(value) = args.get(3) {
@@ -293,59 +474,32 @@ fn train_digits(args: &[String]) {
     let labelled_test_data = label_data_parser
         .parse_files_to_vec("data/digitdata/testimages", "data/digitdata/testlabels", 10)
         .expect("Expect label and data files to be parsable");
+
+    let mut layers = Vec::new();
+    layers.push(width * height);
+    layers.append(&mut intermediate_layers);
+    layers.push(10);
     println!("1️⃣  Training digits");
     println!("   Training set size: {}", labelled_training_data.len());
     println!("   Test set size: {}", labelled_test_data.len());
+    println!(
+        "🔨 Settings\n   RNG seed: {}\n   Used training data: {:.2}%\n   Layers: {:?}\n   Epochs: {}\n   Learn rate: {}",
+        seed, training_data_percent * 100.0, layers, epochs, learn_rate
+    );
     let mut rng = StdRng::seed_from_u64(seed);
-
-    // Neural Network Structure:
-    //
-    // Input (width * height) -> Hidden (20) -> Output (10 digits)
-
-    // Weights + bias for input to hidden layer
-    let mut w_i_h =
-        Array2::<f64>::random_using((20, width * height), Uniform::new(-0.5, 0.5), &mut rng);
-    let mut b_i_h = Array2::<f64>::zeros((20, 1));
-
-    // Weights + bias for hidden layer to output layer
-    let mut w_h_o = Array2::<f64>::random_using((10, 20), Uniform::new(-0.5, 0.5), &mut rng);
-    let mut b_h_o = Array2::<f64>::zeros((10, 1));
-
-    let mut number_correct: usize;
-    for epoch in 0..epochs {
-        number_correct = 0;
-        for (_data, features, label) in labelled_training_data.iter() {
-            // Forward propagation
-            let h_pre = &b_i_h + &w_i_h.dot(features);
-            let h = activation_func(h_pre);
-
-            let o_pre = &b_h_o + &w_h_o.dot(&h);
-            let o = activation_func(o_pre);
-
-            // Cost function
-            // let _e = (1.0 / o.len() as f64) * (&o - label).mapv_into(|v| v.powi(2)).sum();
-
-            if label_certainty_from_vec(&o).0 == label_certainty_from_vec(label).0 {
-                number_correct += 1;
-            }
-
-            // Backpropagation
-            let delta_o = &o - label;
-            w_h_o = w_h_o - learn_rate * &delta_o.dot(&h.t());
-            b_h_o = b_h_o - learn_rate * &delta_o;
-
-            let delta_h = (w_h_o.t().dot(&delta_o)) * activation_func_deriv(h);
-            w_i_h = w_i_h - learn_rate * &delta_h.dot(&features.t());
-            b_i_h = b_i_h - learn_rate * &delta_h;
-        }
-
-        println!(
-            "Epoch {}:\n  Accuracy: {:.2}%",
-            epoch,
-            (number_correct as f64 / labelled_training_data.len() as f64 * 100.0)
-        )
-    }
-
+    let mut neural_network = NeuralNetwork::from_structure(
+        &mut rng,
+        &layers,
+        activation_func,
+        activation_func_deriv,
+        move |x| learn_rate,
+    );
+    let used_training_data_size =
+        (labelled_training_data.len() as f64 * training_data_percent).round() as usize;
+    let used_training_data = &labelled_training_data[..used_training_data_size];
+    neural_network.train_data_set(used_training_data, epochs, true);
+    let accuracy = neural_network.test_accuracy(&labelled_test_data);
+    println!("📄 Neural network accuracy: {:.2}%", accuracy * 100.0);
     loop {
         println!(
             "Enter a test image number (0 - {}) to test: ('q' to quit)",
@@ -359,14 +513,7 @@ fn train_digits(args: &[String]) {
             println!("Data ({}):", label_certainty_from_vec(label).0);
             print_data(data);
 
-            // Forward propagation
-            let h_pre = &b_i_h + &w_i_h.dot(features);
-            let h = activation_func(h_pre);
-
-            let o_pre = &b_h_o + &w_h_o.dot(&h);
-            let o = activation_func(o_pre);
-
-            let (label, certainty) = label_certainty_from_vec(&o);
+            let (label, certainty) = neural_network.test_data_point(features);
 
             println!(
                 "🧠 Neural network predicts: {} with {:.2}% certainty\n",
@@ -395,26 +542,12 @@ fn print_data(data: &RawData) {
     }
 }
 
-fn label_certainty_from_vec(array: &Array2<f64>) -> (usize, f64) {
-    let mut max = 0.0;
-    let mut max_index = 0;
-    let mut index = 0;
-    for elem in array {
-        if *elem > max {
-            max = *elem;
-            max_index = index;
-        }
-        index += 1;
-    }
-    return (max_index, max);
+fn activation_func(x: f64) -> f64 {
+    1.0 / (1.0 + (-x).exp())
 }
 
-fn activation_func(amount: Array2<f64>) -> Array2<f64> {
-    amount.mapv_into(|v| 1.0 / (1.0 + (-v).exp()))
-}
-
-fn activation_func_deriv(amount: Array2<f64>) -> Array2<f64> {
-    amount.mapv_into(|v| (v * (1.0 - v)))
+fn activation_func_deriv(x: f64) -> f64 {
+    x * (1.0 - x)
 }
 
 fn train_faces(args: &[String]) {}

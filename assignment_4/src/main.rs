@@ -1,22 +1,26 @@
-use std::{env, error::Error, fs::File, io::Read, iter::zip, os::raw};
+use std::{
+    env,
+    error::Error,
+    fs::File,
+    io::{stdin, Read},
+};
 
-use ndarray::{prelude::*, ShapeError};
+use ndarray::prelude::*;
 use ndarray_rand::{
     rand::{rngs::StdRng, SeedableRng},
-    rand_distr::Uniform,
+    rand_distr::{num_traits::ToPrimitive, Uniform},
     RandomExt,
 };
 
-type Label = i32;
-type RawData = Vec2D<f32>;
-type Features = ArrayD<f32>;
-struct TrainingData {
-    features: Features,
-    label: u8,
-}
-type TrainingDataSet = Vec<TrainingData>;
+type RawData = Vec2D<f64>;
+type Label = usize;
+type Features = Vec<f64>;
+type LabelVec = Array2<f64>;
+type FeaturesVec = Array2<f64>;
+type LabelFeatureDataSet = Vec<(RawData, Features, Label)>;
+type LabelFeatureVecDataSet = Vec<(RawData, FeaturesVec, LabelVec)>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Vec2D<T: Default + Clone> {
     width: usize,
     height: usize,
@@ -48,13 +52,13 @@ impl LabelParser {
         LabelParser {}
     }
 
-    fn parse_file(&self, file_path: &str) -> Result<Vec<i32>, Box<dyn Error>> {
+    fn parse_file(&self, file_path: &str) -> Result<Vec<Label>, Box<dyn Error>> {
         let mut file = File::open(file_path)?;
         let mut buffer = String::new();
         file.read_to_string(&mut buffer)?;
         let mut labels = Vec::new();
         for label in buffer.split_whitespace() {
-            labels.push(label.parse::<i32>()?)
+            labels.push(label.parse::<Label>()?)
         }
         Ok(labels)
     }
@@ -103,15 +107,18 @@ impl DataParser {
                 x_pos = 0;
                 if y_pos >= self.height {
                     // We've finished parsing one sample
+                    // println!("finished parsing one sample:");
+                    // print_data(&curr_sample);
                     samples_vec.push(curr_sample);
                     y_pos = 0;
                     curr_sample = RawData::new(self.width, self.height);
                 }
             }
             if let Some(index) = self.value_char_range.iter().position(|&x| x == char) {
-                let percent = index as f32 / (self.value_char_range.len() - 1) as f32;
+                let percent = index as f64 / (self.value_char_range.len() - 1) as f64;
                 curr_sample.set(x_pos, y_pos, percent);
             }
+            x_pos += 1;
         }
         samples_vec.push(curr_sample);
         Ok(samples_vec)
@@ -128,7 +135,7 @@ struct LabelDataFeatureParser {
 enum LabelDataFeatureParserError {
     DataParserError(std::io::Error),
     LabelParserError(Box<dyn Error>),
-    FeatureExtractorError(ShapeError),
+    FeatureExtractorError(Box<dyn Error>),
     MismatchedSize(usize, usize),
 }
 
@@ -149,7 +156,7 @@ impl LabelDataFeatureParser {
         &self,
         data_file_path: &str,
         label_file_path: &str,
-    ) -> Result<Vec<(Features, Label)>, LabelDataFeatureParserError> {
+    ) -> Result<LabelFeatureDataSet, LabelDataFeatureParserError> {
         let raw_data = self
             .data_parser
             .parse_file(data_file_path)
@@ -165,28 +172,66 @@ impl LabelDataFeatureParser {
             ));
         }
         let mut features_list = Vec::new();
-        for data in raw_data {
+        for data in raw_data.iter() {
             let features = self
                 .feature_extractor
-                .extract_features(data)
+                .extract_features(data.clone())
                 .map_err(|e| LabelDataFeatureParserError::FeatureExtractorError(e))?;
             features_list.push(features);
         }
-        Ok(zip(features_list, labels).collect())
+        Ok(raw_data
+            .into_iter()
+            .zip(features_list)
+            .zip(labels)
+            .map(|((x, y), z)| (x, y, z))
+            .collect())
+    }
+
+    fn parse_files_to_vec(
+        &self,
+        data_file_path: &str,
+        label_file_path: &str,
+        label_range: usize,
+    ) -> Result<LabelFeatureVecDataSet, LabelDataFeatureParserError> {
+        let data_set = self.parse_files(data_file_path, label_file_path)?;
+        Ok(self.convert_to_vec(data_set, label_range))
+    }
+
+    fn convert_to_vec(
+        &self,
+        data: Vec<(RawData, Features, Label)>,
+        label_range: usize,
+    ) -> LabelFeatureVecDataSet {
+        data.into_iter()
+            .map(|(data, features, label)| {
+                let feat_vec: FeaturesVec = Array2::from_shape_vec((features.len(), 1), features)
+                    .expect("Expect conversion to workfrom_shape");
+                let feat_label: LabelVec =
+                    Array2::from_shape_fn(
+                        (label_range, 1),
+                        |(i, j)| {
+                            if i == label {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        },
+                    );
+                (data, feat_vec, feat_label)
+            })
+            .collect()
     }
 }
 
 trait FeatureExtractor {
-    fn extract_features(&self, data: RawData) -> Result<Features, ShapeError>;
+    fn extract_features(&self, data: RawData) -> Result<Features, Box<dyn Error>>;
 }
 
 struct PixelFeatureExtractor;
 impl FeatureExtractor for PixelFeatureExtractor {
-    fn extract_features(&self, data: RawData) -> Result<Features, ShapeError> {
-        Ok(ArrayD::from_shape_vec(
-            IxDyn(&[data.width, data.height]),
-            data.array,
-        )?)
+    fn extract_features(&self, data: RawData) -> Result<Features, Box<dyn Error>> {
+        // Get a (# pixels) x 1 vector
+        Ok(data.array)
     }
 }
 
@@ -225,9 +270,9 @@ fn train_digits(args: &[String]) {
             epochs = value;
         }
     }
-    let mut learn_rate: f32 = 0.01;
+    let mut learn_rate: f64 = 0.01;
     if let Some(value) = args.get(4) {
-        if let Ok(value) = value.parse::<f32>() {
+        if let Ok(value) = value.parse::<f64>() {
             learn_rate = value;
         }
     }
@@ -239,13 +284,14 @@ fn train_digits(args: &[String]) {
         LabelParser::new(),
     );
     let labelled_training_data = label_data_parser
-        .parse_files(
+        .parse_files_to_vec(
             "data/digitdata/trainingimages",
             "data/digitdata/traininglabels",
+            10,
         )
         .expect("Expect label and data files to be parsable");
     let labelled_test_data = label_data_parser
-        .parse_files("data/digitdata/testimages", "data/digitdata/testlabels")
+        .parse_files_to_vec("data/digitdata/testimages", "data/digitdata/testlabels", 10)
         .expect("Expect label and data files to be parsable");
     println!("1️⃣  Training digits");
     println!("   Training set size: {}", labelled_training_data.len());
@@ -256,20 +302,119 @@ fn train_digits(args: &[String]) {
     //
     // Input (width * height) -> Hidden (20) -> Output (10 digits)
 
-    // Weights for input to hidden layer
-    let w_i_h = Array::random_using((20, width * height), Uniform::new(-0.5, 0.5), &mut rng);
-    let b_i_h = Array::<f64, _>::zeros((20, 1));
+    // Weights + bias for input to hidden layer
+    let mut w_i_h =
+        Array2::<f64>::random_using((20, width * height), Uniform::new(-0.5, 0.5), &mut rng);
+    let mut b_i_h = Array2::<f64>::zeros((20, 1));
 
-    // Weights for hidden layer to output layer
-    let w_h_o = Array::random_using((10, 20), Uniform::new(-0.5, 0.5), &mut rng);
-    let b_i_o = Array::<f64, _>::zeros((10, 1));
+    // Weights + bias for hidden layer to output layer
+    let mut w_h_o = Array2::<f64>::random_using((10, 20), Uniform::new(-0.5, 0.5), &mut rng);
+    let mut b_h_o = Array2::<f64>::zeros((10, 1));
 
-    let mut number_correct: usize = 0;
+    let mut number_correct: usize;
     for epoch in 0..epochs {
-        for (features, label) in labelled_training_data.iter() {
-            // TODO
+        number_correct = 0;
+        for (_data, features, label) in labelled_training_data.iter() {
+            // Forward propagation
+            let h_pre = &b_i_h + &w_i_h.dot(features);
+            let h = activation_func(h_pre);
+
+            let o_pre = &b_h_o + &w_h_o.dot(&h);
+            let o = activation_func(o_pre);
+
+            // Cost function
+            // let _e = (1.0 / o.len() as f64) * (&o - label).mapv_into(|v| v.powi(2)).sum();
+
+            if label_certainty_from_vec(&o).0 == label_certainty_from_vec(label).0 {
+                number_correct += 1;
+            }
+
+            // Backpropagation
+            let delta_o = &o - label;
+            w_h_o = w_h_o - learn_rate * &delta_o.dot(&h.t());
+            b_h_o = b_h_o - learn_rate * &delta_o;
+
+            let delta_h = (w_h_o.t().dot(&delta_o)) * activation_func_deriv(h);
+            w_i_h = w_i_h - learn_rate * &delta_h.dot(&features.t());
+            b_i_h = b_i_h - learn_rate * &delta_h;
+        }
+
+        println!(
+            "Epoch {}:\n  Accuracy: {:.2}%",
+            epoch,
+            (number_correct as f64 / labelled_training_data.len() as f64 * 100.0)
+        )
+    }
+
+    loop {
+        println!(
+            "Enter a test image number (0 - {}) to test: ('q' to quit)",
+            labelled_test_data.len()
+        );
+        let mut input = String::new();
+        stdin().read_line(&mut input).expect("Expected input");
+        if let Ok(index) = input.trim().parse::<usize>() {
+            let (data, features, label) = &labelled_test_data[index];
+
+            println!("Data ({}):", label_certainty_from_vec(label).0);
+            print_data(data);
+
+            // Forward propagation
+            let h_pre = &b_i_h + &w_i_h.dot(features);
+            let h = activation_func(h_pre);
+
+            let o_pre = &b_h_o + &w_h_o.dot(&h);
+            let o = activation_func(o_pre);
+
+            let (label, certainty) = label_certainty_from_vec(&o);
+
+            println!(
+                "🧠 Neural network predicts: {} with {:.2}% certainty\n",
+                label,
+                certainty * 100.0
+            )
+        } else if input.trim() == "q" {
+            break;
         }
     }
+}
+
+fn print_data(data: &RawData) {
+    for y in 0..data.height {
+        for x in 0..data.width {
+            let val = *data.get(x, y);
+            if val > 0.5 {
+                print!("#")
+            } else if val > 0.0 {
+                print!("+")
+            } else {
+                print!(" ")
+            }
+        }
+        println!()
+    }
+}
+
+fn label_certainty_from_vec(array: &Array2<f64>) -> (usize, f64) {
+    let mut max = 0.0;
+    let mut max_index = 0;
+    let mut index = 0;
+    for elem in array {
+        if *elem > max {
+            max = *elem;
+            max_index = index;
+        }
+        index += 1;
+    }
+    return (max_index, max);
+}
+
+fn activation_func(amount: Array2<f64>) -> Array2<f64> {
+    amount.mapv_into(|v| 1.0 / (1.0 + (-v).exp()))
+}
+
+fn activation_func_deriv(amount: Array2<f64>) -> Array2<f64> {
+    amount.mapv_into(|v| (v * (1.0 - v)))
 }
 
 fn train_faces(args: &[String]) {}

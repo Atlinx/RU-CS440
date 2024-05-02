@@ -1,49 +1,34 @@
-use std::{env, io::stdin, vec};
+use std::{env, vec};
 
 use ai::AI;
 use ndarray_rand::rand::{rngs::StdRng, SeedableRng};
+use runner::{
+    manual_runner::ManualRunner, sampler_runner::SamplerRunner, AIConfig, CompleteDatasetConfig,
+    Runner,
+};
 
 use crate::{
     ai::{
-        activation_func, activation_func_deriv, label_certainty_from_vec,
-        neural_network::NeuralNetwork, perceptron::Perceptron,
+        activation_func, activation_func_deriv, neural_network::NeuralNetwork,
+        perceptron::Perceptron,
     },
-    feature_extractor::pixel_feature_extractor::PixelFeatureExtractor,
-    parser::{
-        data_parser::DataParser, label_data_feature_parser::LabelDataFeatureParser,
-        label_parser::LabelParser,
-    },
-    types::RawDataExtens,
+    parser::data_parser::DataParser,
 };
 
 pub mod ai;
 pub mod feature_extractor;
 pub mod parser;
+pub mod runner;
 pub mod types;
 
-struct AIConfig {
-    name: String,
-    ai: Box<dyn AI>,
-    epochs: usize,
-}
-
-struct TrainingValidationDatasetConfig {
-    title: String,
-    width: usize,
-    height: usize,
-    split_chars: Vec<char>,
-    char_range: Vec<char>,
-    training_data_path: String,
-    training_labels_path: String,
-    validation_data_path: String,
-    validation_labels_path: String,
-    training_data_percent: f64,
-    label_range: usize,
-    label_to_text_fn: Box<dyn Fn(usize) -> String + Sync + Send>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunnerType {
+    Manual,
+    Sampler,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TrainingDatasetType {
+enum DatasetType {
     Digits,
     Faces,
 }
@@ -54,81 +39,6 @@ enum AiType {
     Perceptron,
 }
 
-fn train_and_test_ai(mut ai_config: AIConfig, dataset_config: TrainingValidationDatasetConfig) {
-    let label_data_parser = LabelDataFeatureParser::new(
-        DataParser::new(
-            dataset_config.width,
-            dataset_config.height,
-            dataset_config.split_chars,
-            dataset_config.char_range,
-        ),
-        PixelFeatureExtractor,
-        LabelParser::new(),
-    );
-    let labelled_training_data = label_data_parser
-        .parse_files_to_vec(
-            &dataset_config.training_data_path,
-            &dataset_config.training_labels_path,
-            dataset_config.label_range,
-        )
-        .expect("Expect label and data files to be parsable");
-    let labelled_test_data = label_data_parser
-        .parse_files_to_vec(
-            &dataset_config.validation_data_path,
-            &dataset_config.validation_labels_path,
-            dataset_config.label_range,
-        )
-        .expect("Expect label and data files to be parsable");
-
-    println!("{}", dataset_config.title);
-    println!("   Training set size: {}", labelled_training_data.len());
-    println!("   Test set size: {}", labelled_test_data.len());
-    println!(
-        "   Used training data: {:.2}%",
-        dataset_config.training_data_percent * 100.0
-    );
-    let used_training_data_size = (labelled_training_data.len() as f64
-        * dataset_config.training_data_percent)
-        .round() as usize;
-    let used_training_data = &labelled_training_data[..used_training_data_size];
-    ai_config
-        .ai
-        .train_data_set(used_training_data, ai_config.epochs, true);
-    let accuracy = ai_config.ai.test_accuracy(&labelled_test_data);
-    println!("📄 {} accuracy: {:.2}%", ai_config.name, accuracy * 100.0);
-    loop {
-        println!(
-            "Enter a test image number (0 - {}) to test: ('q' to quit)",
-            labelled_test_data.len()
-        );
-        let mut input = String::new();
-        stdin().read_line(&mut input).expect("Expected input");
-        if let Ok(index) = input.trim().parse::<usize>() {
-            let (data, features, label) = &labelled_test_data[index];
-
-            let label_index = label_certainty_from_vec(label).0;
-            println!(
-                "Data ({}: {}):",
-                (dataset_config.label_to_text_fn)(label_index),
-                label_index,
-            );
-            data.print();
-
-            let (guess_label_index, guess_certainty) = ai_config.ai.test_data_point(features);
-
-            println!(
-                "🧠 {} predicts: ({}: {}) with {:.2}% certainty\n",
-                ai_config.name,
-                (dataset_config.label_to_text_fn)(guess_label_index),
-                guess_label_index,
-                guess_certainty * 100.0
-            )
-        } else if input.trim() == "q" {
-            break;
-        }
-    }
-}
-
 fn main() {
     env::set_var("RUST_BACKTRACE", "1");
     let mut args: Vec<String> = env::args().collect();
@@ -136,11 +46,19 @@ fn main() {
     // Remove the name of the program
     args.pop();
 
-    let mut dataset_type = TrainingDatasetType::Digits;
+    let mut runner_type = RunnerType::Manual;
+    if let Some(value) = args.pop() {
+        runner_type = match value.as_str() {
+            "sampler" => RunnerType::Sampler,
+            _ => RunnerType::Manual,
+        }
+    }
+
+    let mut dataset_type = DatasetType::Digits;
     if let Some(value) = args.pop() {
         dataset_type = match value.as_str() {
-            "faces" => TrainingDatasetType::Faces,
-            _ => TrainingDatasetType::Digits,
+            "faces" => DatasetType::Faces,
+            _ => DatasetType::Digits,
         }
     }
 
@@ -191,7 +109,7 @@ fn main() {
     }
 
     let dataset_config = match dataset_type {
-        TrainingDatasetType::Digits => TrainingValidationDatasetConfig {
+        DatasetType::Digits => CompleteDatasetConfig {
             title: "1️⃣  Digits".to_owned(),
             width: 28,
             height: 28,
@@ -205,7 +123,7 @@ fn main() {
             label_range: 10,
             label_to_text_fn: Box::new(|label| label.to_string()),
         },
-        TrainingDatasetType::Faces => TrainingValidationDatasetConfig {
+        DatasetType::Faces => CompleteDatasetConfig {
             title: "😀 Faces".to_owned(),
             width: 60,
             height: 70,
@@ -270,5 +188,17 @@ fn main() {
         name: ai_name,
     };
 
-    train_and_test_ai(ai_config, dataset_config);
+    let mut runner: Box<dyn Runner> = match runner_type {
+        RunnerType::Manual => Box::new(ManualRunner {
+            ai_config,
+            dataset_config,
+        }),
+        RunnerType::Sampler => Box::new(SamplerRunner {
+            ai_config,
+            dataset_config,
+            seed,
+        }),
+    };
+
+    runner.run();
 }

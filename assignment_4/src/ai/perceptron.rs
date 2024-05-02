@@ -67,17 +67,4 @@ impl AI for Perceptron {
         // TODO: Forward propagation
         todo!()
     }
-
-    // Returns the accuracy of the neural network accross an entire data set.
-    fn test_accuracy(&self, data_set: &LabelFeatureVecDataSetSlice) -> f64 {
-        let mut number_correct: usize = 0;
-        for (_, features, label) in data_set {
-            let (predicted_label_index, _) = self.test_data_point(features);
-            let correct = predicted_label_index == label_certainty_from_vec(label).0;
-            if correct {
-                number_correct += 1;
-            }
-        }
-        number_correct as f64 / data_set.len() as f64
-    }
 }

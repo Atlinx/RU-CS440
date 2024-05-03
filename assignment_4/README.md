@@ -25,7 +25,7 @@ Back-propagation neural network + perceptron for Assignment 4.
         - seed `u64` -> Random seed
         - epochs `usize` -> Number of iterations trained on the same training data set
         - learn_rate `f64` -> Learning rate of the neural network
-  - sampler -> Automatically collects data using random samples of training data
+  - sampler -> Automatically collects data using random samples of a given percent of training data
     - sample_count `usize` -> Number of samples to test for a given % of training data
     - dataset `enum` -> Data set to train on
       - digits
@@ -46,7 +46,7 @@ Back-propagation neural network + perceptron for Assignment 4.
         - seed `u64` -> Random seed
         - epochs `usize` -> Number of iterations trained on the same training data set
         - learn_rate `f64` -> Learning rate of the neural network
-  - sampler -> Automatically collects data using random samples of training data
+  - sampler_set -> Automatically collects data using random samples of [10%, 20%, 30%, ... 100%] of the training data
     - sample_count `usize` -> Number of samples to test for a given % of training data
     - dataset `enum` -> Data set to train on
       - digits

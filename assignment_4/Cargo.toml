@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 ndarray = { version = "0.15.6", features = ["rayon"] }
 ndarray-rand = "0.14.0"
+dyn-clone = "1.0.17"
+rand = "0.8.5"

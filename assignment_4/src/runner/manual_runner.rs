@@ -1,63 +1,33 @@
 use std::io::stdin;
 
-use crate::{
-    ai::label_certainty_from_vec,
-    feature_extractor::pixel_feature_extractor::PixelFeatureExtractor,
-    parser::{
-        data_parser::DataParser, label_data_feature_parser::LabelDataFeatureParser,
-        label_parser::LabelParser,
-    },
-    types::RawDataExtens,
-};
+use crate::{ai::label_certainty_from_vec, types::RawDataExtens};
 
 use super::{AIConfig, CompleteDatasetConfig, Runner};
 
 pub struct ManualRunner {
     pub ai_config: AIConfig,
     pub dataset_config: CompleteDatasetConfig,
+    pub training_data_percent: f64,
 }
 
 impl Runner for ManualRunner {
     fn run(&mut self) {
-        let label_data_parser = LabelDataFeatureParser::new(
-            DataParser::new(
-                self.dataset_config.width,
-                self.dataset_config.height,
-                self.dataset_config.split_chars.clone(),
-                self.dataset_config.char_range.clone(),
-            ),
-            PixelFeatureExtractor,
-            LabelParser::new(),
-        );
-        let labelled_training_data = label_data_parser
-            .parse_files_to_vec(
-                &self.dataset_config.training_data_path,
-                &self.dataset_config.training_labels_path,
-                self.dataset_config.label_range,
-            )
-            .expect("Expect label and data files to be parsable");
-        let labelled_test_data = label_data_parser
-            .parse_files_to_vec(
-                &self.dataset_config.validation_data_path,
-                &self.dataset_config.validation_labels_path,
-                self.dataset_config.label_range,
-            )
-            .expect("Expect label and data files to be parsable");
-
-        println!("{}", self.dataset_config.title);
-        println!("   Training set size: {}", labelled_training_data.len());
-        println!("   Test set size: {}", labelled_test_data.len());
+        println!("👋 Manual Runner");
         println!(
             "   Used training data: {:.2}%",
-            self.dataset_config.training_data_percent * 100.0
+            self.training_data_percent * 100.0
         );
-        let used_training_data_size = (labelled_training_data.len() as f64
-            * self.dataset_config.training_data_percent)
-            .round() as usize;
-        let used_training_data = &labelled_training_data[..used_training_data_size];
+        let (labelled_training_data, labelled_test_data) =
+            self.dataset_config.load_training_test_datasets();
+        let used_training_data_size =
+            (labelled_training_data.len() as f64 * self.training_data_percent).round() as usize;
+        let used_training_data = labelled_training_data[..used_training_data_size]
+            .iter()
+            .cloned()
+            .collect();
         self.ai_config
             .ai
-            .train_data_set(used_training_data, self.ai_config.epochs, true);
+            .train_data_set(&used_training_data, self.ai_config.epochs, true);
         let accuracy = self.ai_config.ai.test_accuracy(&labelled_test_data);
         println!(
             "📄 {} accuracy: {:.2}%",
@@ -72,7 +42,7 @@ impl Runner for ManualRunner {
             let mut input = String::new();
             stdin().read_line(&mut input).expect("Expected input");
             if let Ok(index) = input.trim().parse::<usize>() {
-                let (data, features, label) = &labelled_test_data[index];
+                let (data, features, label) = labelled_test_data[index].as_ref();
 
                 let label_index = label_certainty_from_vec(label).0;
                 println!(

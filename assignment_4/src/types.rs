@@ -1,13 +1,18 @@
+use std::sync::Arc;
+
 use ndarray::Array2;
 
 pub type RawData = Vec2D<f64>;
 pub type Label = usize;
 pub type Features = Vec<f64>;
+
 pub type LabelVec = Array2<f64>;
 pub type FeaturesVec = Array2<f64>;
+
 pub type LabelFeatureDataSet = Vec<(RawData, Features, Label)>;
-pub type LabelFeatureVecDataSet = Vec<(RawData, FeaturesVec, LabelVec)>;
-pub type LabelFeatureVecDataSetSlice = [(RawData, FeaturesVec, LabelVec)];
+
+pub type LabelFeatureVecDataPoint = (RawData, FeaturesVec, LabelVec);
+pub type LabelFeatureVecDataSet = Vec<Arc<LabelFeatureVecDataPoint>>;
 
 #[derive(Debug, Clone)]
 pub struct Vec2D<T: Default + Clone> {
@@ -53,5 +58,49 @@ impl RawDataExtens for RawData {
             }
             println!()
         }
+    }
+}
+
+pub trait F64VecExtens {
+    /// Returns the mean of a list of f64
+    fn mean(&self) -> f64;
+    // Returns the standard deviation of a list of f64
+    fn stdev(&self) -> f64;
+    /// Returns (mean, standard deviation) of a list of f64
+    fn dist_info(&self) -> (f64, f64);
+}
+
+impl F64VecExtens for Vec<f64> {
+    /// Returns the mean of a list of f64
+    fn mean(&self) -> f64 {
+        let mut total = 0.0;
+        for elem in self {
+            total += elem;
+        }
+        total / self.len() as f64
+    }
+
+    // Returns the standard deviation of a list of f64
+    fn stdev(&self) -> f64 {
+        let mean = self.mean();
+
+        let mut total = 0.0;
+        for elem in self {
+            total += (elem - mean).powi(2);
+        }
+        (total / self.len() as f64).sqrt()
+    }
+
+    /// Returns (mean, standard deviation) of a list of f64
+    fn dist_info(&self) -> (f64, f64) {
+        let mean = self.mean();
+
+        let mut total = 0.0;
+        for elem in self {
+            total += (elem - mean).powi(2);
+        }
+        let stdev = (total / self.len() as f64).sqrt();
+
+        (mean, stdev)
     }
 }

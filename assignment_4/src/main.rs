@@ -1,10 +1,9 @@
 use std::{env, vec};
 
 use ai::AI;
-use ndarray_rand::rand::{rngs::StdRng, SeedableRng};
 use runner::{
-    manual_runner::ManualRunner, sampler_runner::SamplerRunner, AIConfig, CompleteDatasetConfig,
-    Runner,
+    manual_runner::ManualRunner, sampler_runner::SamplerRunner,
+    sampler_set_runner::SamplerSetRunner, AIConfig, CompleteDatasetConfig, Runner,
 };
 
 use crate::{
@@ -25,6 +24,7 @@ pub mod types;
 enum RunnerType {
     Manual,
     Sampler,
+    SamplerSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +50,17 @@ fn main() {
     if let Some(value) = args.pop() {
         runner_type = match value.as_str() {
             "sampler" => RunnerType::Sampler,
+            "sampler_set" => RunnerType::SamplerSet,
             _ => RunnerType::Manual,
+        }
+    }
+
+    let mut sample_count: usize = 0;
+    if runner_type == RunnerType::Sampler || runner_type == RunnerType::SamplerSet {
+        if let Some(value) = args.pop() {
+            if let Ok(value) = value.parse::<usize>() {
+                sample_count = value;
+            }
         }
     }
 
@@ -59,6 +69,16 @@ fn main() {
         dataset_type = match value.as_str() {
             "faces" => DatasetType::Faces,
             _ => DatasetType::Digits,
+        }
+    }
+
+    let mut training_data_percent: f64 = 1.0;
+    if runner_type == RunnerType::Manual || runner_type == RunnerType::Sampler {
+        if let Some(value) = args.pop() {
+            println!("rec train data percent: {}", value);
+            if let Ok(value) = value.parse::<f64>() {
+                training_data_percent = value / 100.0;
+            }
         }
     }
 
@@ -74,13 +94,6 @@ fn main() {
     if let Some(value) = args.pop() {
         if let Ok(value) = value.parse::<u64>() {
             seed = value;
-        }
-    }
-
-    let mut training_data_percent: f64 = 1.0;
-    if let Some(value) = args.pop() {
-        if let Ok(value) = value.parse::<f64>() {
-            training_data_percent = value / 100.0;
         }
     }
 
@@ -119,9 +132,8 @@ fn main() {
             training_labels_path: "data/digitdata/traininglabels".to_owned(),
             validation_data_path: "data/digitdata/testimages".to_owned(),
             validation_labels_path: "data/digitdata/testlabels".to_owned(),
-            training_data_percent,
             label_range: 10,
-            label_to_text_fn: Box::new(|label| label.to_string()),
+            label_to_text_fn: Box::new(&|label| label.to_string()),
         },
         DatasetType::Faces => CompleteDatasetConfig {
             title: "😀 Faces".to_owned(),
@@ -133,9 +145,8 @@ fn main() {
             training_labels_path: "data/facedata/facedatatrainlabels".to_owned(),
             validation_data_path: "data/facedata/facedatatest".to_owned(),
             validation_labels_path: "data/facedata/facedatatestlabels".to_owned(),
-            training_data_percent,
             label_range: 2,
-            label_to_text_fn: Box::new(|label| {
+            label_to_text_fn: Box::new(&|label| {
                 match label {
                     1 => "Face",
                     _ => "Not Face",
@@ -156,14 +167,12 @@ fn main() {
             layers.push(dataset_config.label_range);
             println!("💡 Neural Network");
             println!(
-                "🔨 Settings\n   RNG seed: {}\n   Used training data: {:.2}%\n   Layers: {:?}\n   Epochs: {}\n   Learn rate: {}",
-                seed, training_data_percent * 100.0, layers, epochs, learn_rate
+                "   RNG seed: {}\n   Layers: {:?}\n   Epochs: {}\n   Learn rate: {}",
+                seed, layers, epochs, learn_rate
             );
-            let mut rng = StdRng::seed_from_u64(seed);
-
             ai_name = "Neural network".to_owned();
             ai = Box::new(NeuralNetwork::from_structure(
-                &mut rng,
+                seed,
                 &layers,
                 activation_func,
                 activation_func_deriv,
@@ -172,10 +181,7 @@ fn main() {
         }
         AiType::Perceptron => {
             println!("👀 Perceptron");
-            println!(
-                "🔨 Settings\n   Epochs: {}\n   Learn rate: {}",
-                epochs, learn_rate
-            );
+            println!("   Epochs: {}\n   Learn rate: {}", epochs, learn_rate);
 
             ai_name = "Perceptron".to_owned();
             ai = Box::new(Perceptron::new(learn_rate))
@@ -192,11 +198,21 @@ fn main() {
         RunnerType::Manual => Box::new(ManualRunner {
             ai_config,
             dataset_config,
+            training_data_percent,
         }),
         RunnerType::Sampler => Box::new(SamplerRunner {
             ai_config,
             dataset_config,
             seed,
+            sample_count,
+            training_data_percent,
+        }),
+        RunnerType::SamplerSet => Box::new(SamplerSetRunner {
+            ai_config,
+            dataset_config,
+            sample_count,
+            seed,
+            training_data_percents: vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
         }),
     };
 

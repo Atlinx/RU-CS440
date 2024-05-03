@@ -1,7 +1,10 @@
-use crate::types::{FeaturesVec, LabelFeatureVecDataSetSlice, LabelVec};
+use std::sync::Arc;
 
-use super::{label_certainty_from_vec, AI};
+use crate::types::{FeaturesVec, LabelFeatureVecDataPoint, LabelVec};
 
+use super::AI;
+
+#[derive(Clone)]
 pub struct Perceptron {
     learn_rate: f64,
 }
@@ -13,24 +16,25 @@ impl Perceptron {
 }
 
 impl AI for Perceptron {
-    // Trains the neural network on an entire data set
-    fn train_data_set(
+    /// Trains the neural network on an entire data set
+    fn train_data_set<'a>(
         &mut self,
-        data_set: &LabelFeatureVecDataSetSlice,
+        dataset: &Vec<Arc<LabelFeatureVecDataPoint>>,
         epochs: usize,
         print: bool,
     ) {
         if print {
             println!(
                 "✏️  Start training on dataset (size: {}, epochs: {})",
-                data_set.len(),
+                dataset.len(),
                 epochs
             )
         }
         for epoch in 0..epochs {
             let mut number_correct: usize = 0;
-            for (_, features, label) in data_set {
-                let correct = self.train_data_point(features, label);
+            for datapoint in dataset {
+                let (_, features, label) = datapoint.as_ref();
+                let correct = self.train_data_point(&features, &label);
                 if correct {
                     number_correct += 1;
                 }
@@ -39,7 +43,7 @@ impl AI for Perceptron {
                 println!(
                     "   📆 Epoch {}: Accuracy: {:.2}% Learn rate: {}",
                     epoch,
-                    (number_correct as f64 / data_set.len() as f64 * 100.0).round(),
+                    (number_correct as f64 / dataset.len() as f64 * 100.0).round(),
                     self.learn_rate
                 )
             }
@@ -49,9 +53,9 @@ impl AI for Perceptron {
         }
     }
 
-    // Trains the neural network on a single data point.
-    // Returns the whether the neural network correctly predicted
-    // the data point or not.
+    /// Trains the neural network on a single data point.
+    /// Returns the whether the neural network correctly predicted
+    /// the data point or not.
     fn train_data_point(&mut self, features: &FeaturesVec, label: &LabelVec) -> bool {
         // TODO: Forward propagation
 
@@ -61,10 +65,13 @@ impl AI for Perceptron {
         todo!()
     }
 
-    // Tests the neural network on a data point.
-    // Returns the a tuple containing the prediction label and certainty of the prediction.
+    /// Tests the neural network on a data point.
+    /// Returns the a tuple containing the prediction label and certainty of the prediction.
     fn test_data_point(&self, features: &FeaturesVec) -> (usize, f64) {
         // TODO: Forward propagation
         todo!()
     }
+
+    /// Resets training
+    fn reset(&mut self) {}
 }

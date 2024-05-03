@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use ndarray::Array2;
 
@@ -96,7 +96,7 @@ impl LabelDataFeatureParser {
                 let feat_label: LabelVec =
                     Array2::from_shape_fn(
                         (label_range, 1),
-                        |(i, j)| {
+                        |(i, _)| {
                             if i == label {
                                 1.0
                             } else {
@@ -104,7 +104,7 @@ impl LabelDataFeatureParser {
                             }
                         },
                     );
-                (data, feat_vec, feat_label)
+                Arc::new((data, feat_vec, feat_label))
             })
             .collect()
     }

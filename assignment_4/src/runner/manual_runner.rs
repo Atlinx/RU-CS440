@@ -37,11 +37,14 @@ impl Runner for ManualRunner {
         loop {
             println!(
                 "Enter a test image number (0 - {}) to test: ('q' to quit)",
-                labelled_test_data.len()
+                labelled_test_data.len() - 1
             );
             let mut input = String::new();
             stdin().read_line(&mut input).expect("Expected input");
             if let Ok(index) = input.trim().parse::<usize>() {
+                if index >= labelled_test_data.len() {
+                    continue;
+                }
                 let (data, features, label) = labelled_test_data[index].as_ref();
 
                 let label_index = label_certainty_from_vec(label).0;

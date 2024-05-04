@@ -184,7 +184,11 @@ fn main() {
             println!("   Epochs: {}\n   Learn rate: {}", epochs, learn_rate);
 
             ai_name = "Perceptron".to_owned();
-            ai = Box::new(Perceptron::new(learn_rate))
+            ai = Box::new(Perceptron::new(
+                learn_rate,
+                dataset_config.label_range,
+                dataset_config.height * dataset_config.width,
+            ))
         }
     };
 
